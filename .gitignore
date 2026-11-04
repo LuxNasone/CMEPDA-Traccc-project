@@ -1,0 +1,8 @@
+acts/
+traccc-build/
+build/
+*.root
+*.csv
+*.dat
+__pycache__/
+.vscode/
