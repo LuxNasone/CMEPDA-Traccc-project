@@ -4,6 +4,7 @@ detray-build/
 build/
 data/
 venv/
+logs/
 __pycache__/
 .pytest_cache/
 .vscode/
