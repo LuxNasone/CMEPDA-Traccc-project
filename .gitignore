@@ -1,8 +1,14 @@
 acts/
 traccc-build/
+detray-build/
 build/
+data/
+venv/
+__pycache__/
+.pytest_cache/
+.vscode/
 *.root
 *.csv
 *.dat
-__pycache__/
-.vscode/
+*.json
+!config/*.json
