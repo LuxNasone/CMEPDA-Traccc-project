@@ -1,6 +1,7 @@
 acts/
 traccc-build/
 detray-build/
+docs/doxygen/
 build/
 data/
 venv/
