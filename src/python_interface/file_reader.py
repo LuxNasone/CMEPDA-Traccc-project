@@ -61,6 +61,7 @@ def read_hits(filename):
         return {i: Hit(i, row) for i, row in enumerate(csv.DictReader(f))}
 
 def read_objects(filename, cls, key):
+    
     with open(filename, newline="") as f:
         objects = map(cls, csv.DictReader(f))
         return {getattr(obj, key): obj for obj in objects}
