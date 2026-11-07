@@ -13,9 +13,9 @@ class LandauDeposit:
     def __init__(self, loc, scale, width, seed):
         '''
         @brief Default constructor
-        @param loc : (float) most probable charge per unit thickness, in electrons/um
-        @param scale : (float) width of the distribution per unit thickness, in electrons/um
-        @param width : (float) sensor thickness, in um: it scales the total charge
+        @param loc : (float) most probable charge per unit thickness, in electrons/um. Required positive or zero.
+        @param scale : (float) width of the distribution per unit thickness, in electrons/um. Required strictly positive.
+        @param width : (float) sensor thickness, in um: it scales the total charge. Required positive or zero
         @param seed : (int) statistical seed of the random generator
         '''
         if width <= 0:
@@ -45,19 +45,18 @@ class LandauDeposit:
 
     def throw(self, n=1, rng=None):
         '''
-        @brief Given all attributes above determines the charge released
-        @param n : (int) number of particles crossing the sensor
+        @brief Given all attributes above determines the charge released. 
+        @param n : (int) number of particles crossing the sensor 
         @param rng : (numpy.random.Generator, optional) generator to use instead
                      of the one created from seed, e.g. one per event
         @return (array of float) charge released by each particle, in electrons.
                 Negative values are set to 0.
+                If the scale tends to zero, the distribution tends to a Dirac Delta in the MPV, which is then returned.
         '''
         rng = self.rng if rng is None else rng
-        if self.charge_scale == 0:
-            return np.full(n, self.most_probable_charge)
+        if self.charge_scale == 0: return np.full(n, self.most_probable_charge)
 
-        charge = moyal.rvs(loc=self.most_probable_charge, scale=self.charge_scale,
-                           size=n, random_state=rng)
+        charge = moyal.rvs(loc=self.most_probable_charge, scale=self.charge_scale, size=n, random_state=rng)
         return np.clip(charge, 0.0, None)
 
 class ChargeCloud:
@@ -69,10 +68,8 @@ class ChargeCloud:
     def __init__(self, sigma, n_sigma=4.0):
         '''
         @brief Default constructor
-        @param sigma : (float) width of the cloud, in mm. With 0 all the charge
-                       goes to the crossed pixel.
-        @param n_sigma : (float) distance, in sigma, beyond which the charge is
-                         neglected
+        @param sigma : (float) width of the cloud, in mm. With 0 all the charge goes to the crossed pixel. Assumed strictly positive.
+        @param n_sigma : (float) distance, in sigma, beyond which the charge is neglected. Assumed positive or zero
         '''
         if sigma < 0 or n_sigma <= 0:
             raise ValueError("sigma must be non-negative and n_sigma positive")
@@ -81,13 +78,17 @@ class ChargeCloud:
 
     def share(self, grid, local_0, local_1, charge):
         '''
-        @brief Shares the charge of each crossing among the nearby pixels
+        @brief Shares the charge of each crossing among the nearby pixels.
+
+        1. After converting local coordinates to channels, we assign them charge fractions and spread the charge (w0 and w1)
+        2. Broadcast the array in order to check if the charge value calculated is physcal (positive and in the grid)
+
         @param grid : (PixelGrid) pixel matrix of the module
-        @param local_0, local_1 : (array of float) crossing points, in mm
-        @param charge : (array of float) charge of each crossing, in electrons
+        @param local_0, local_1 : (float array) crossing points, in mm.
+        @param charge : (float array) charge of each crossing, in electrons
         @return source, channel_0, channel_1, value : for each pixel reached, the
-                index of the crossing that lit it, its channels and the charge it
-                collected. Pixels outside the matrix are dropped.
+                index of the crossing that lit it, its channels and the charge it collected. 
+                Pixels outside the matrix are dropped.
         '''
         local_0 = np.atleast_1d(np.asarray(local_0, dtype=float))
         local_1 = np.atleast_1d(np.asarray(local_1, dtype=float))
@@ -97,7 +98,6 @@ class ChargeCloud:
         channels_0, fraction_0 = self._axis_fractions(grid, local_0, centre_0, 0)
         channels_1, fraction_1 = self._axis_fractions(grid, local_1, centre_1, 1)
 
-        # One entry for each (crossing, pixel along 0, pixel along 1)
         n, w0 = channels_0.shape
         w1 = channels_1.shape[1]
         shape = (n, w0, w1)
@@ -111,16 +111,21 @@ class ChargeCloud:
 
     def _axis_fractions(self, grid, local, centre, axis):
         '''
-        @brief Pixels near each crossing along one axis and the charge fraction
-               each of them collects
+        @brief Pixels near each crossing along one axis and the charge fraction each of them collects:
+
+        1. Calculates the spread in channel units, thus obtaining the channel that gathered charge
+        2. Gets the center along x (0) or y (0), with the channel_center method (direction chesen with axis)
+        3. Calculates upper/lower bounds of each pixel (use pitch method)
+        4. Calculates the fractions with two gaussian cumulative functions
+
         @param grid : (PixelGrid) pixel matrix
         @param local : (array of float) crossing coordinates along the axis, in mm
         @param centre : (array of int) crossed channel along the axis
         @param axis : (int) 0 for local_0, 1 for local_1
-        @return channels, fractions : arrays of shape (crossings, pixels)
+        @return channels, fractions : arrays of shape (crossings, pixels).
+                If sigma is zero, a vector of None is returned as no other pixels are interested by the charge spread besides the crossed one (fraction = 1) 
         '''
-        if self.sigma == 0:
-            return centre[:, None], np.ones((len(local), 1))
+        if self.sigma == 0: return centre[:, None], np.ones((len(local), 1))
 
         k = math.ceil(self.n_sigma * self.sigma / grid.pitch)
         channels = centre[:, None] + np.arange(-k, k + 1)

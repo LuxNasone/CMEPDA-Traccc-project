@@ -11,10 +11,10 @@ class Readout:
         @brief Default constructor
         @param mean_noise : (float) mean of the gaussian noise, in electrons
                             (usually 0, since the pedestal is subtracted)
-        @param sigma_noise : (float) sigma of the gaussian noise, in electrons
-        @param thr : (float) threshold in electrons for the signal charge
+        @param sigma_noise : (float) sigma of the gaussian noise, in electrons. Must be positive.
+        @param thr : (float) threshold in electrons for the signal charge. Must be positive.
         @param noisy_fraction : (float) probability that a pixel fires without
-                                any particle in an event
+                                any particle in an event. Must be between 0 and 1.
         @param seed : (int) statistical seed for sampling
         '''
         if sigma_noise < 0 or thr < 0:
