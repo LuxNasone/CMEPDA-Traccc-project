@@ -1,0 +1,56 @@
+diff --git a/Traccc/examples/simulation/CMakeLists.txt b/Traccc/examples/simulation/CMakeLists.txt
+index b642bd070..95758c1f5 100644
+--- a/Traccc/examples/simulation/CMakeLists.txt
++++ b/Traccc/examples/simulation/CMakeLists.txt
+@@ -27,3 +27,9 @@ traccc_add_executable(simulate_wire_chamber "simulate_wire_chamber.cpp"
+     LINK_LIBRARIES vecmem::core traccc::io traccc::core
+     traccc::options traccc::simulation detray::io detray::test_common covfie::core Boost::filesystem
+ )
++
++traccc_add_executable(toy_mc
++    "/home/lux_n/MasterProjects/CMEPDA/Exam_2/src/simulation/ToyMC.cpp"
++    LINK_LIBRARIES vecmem::core traccc::io traccc::core
++    traccc::options traccc::simulation detray::io detray::test_common covfie::core Boost::filesystem
++)
+\ No newline at end of file
+diff --git a/Traccc/simulation/CMakeLists.txt b/Traccc/simulation/CMakeLists.txt
+index 7c48ad425..8f88be28d 100644
+--- a/Traccc/simulation/CMakeLists.txt
++++ b/Traccc/simulation/CMakeLists.txt
+@@ -24,3 +24,4 @@ target_link_libraries(
+         detray::test_common
+         detray::test_utils
+ )
++
+diff --git a/Traccc/simulation/include/traccc/simulation/simulator.hpp b/Traccc/simulation/include/traccc/simulation/simulator.hpp
+index dce49a8f2..440afed44 100644
+--- a/Traccc/simulation/include/traccc/simulation/simulator.hpp
++++ b/Traccc/simulation/include/traccc/simulation/simulator.hpp
+@@ -19,6 +19,7 @@
+ 
+ // System include(s).
+ #include <limits>
++#include <cstdint>
+ #include <memory>
+ 
+ namespace traccc {
+@@ -35,6 +36,8 @@ struct simulator {
+ 
+     /// Particle hypothesis
+     traccc::pdg_particle<scalar_type> ptc_type{traccc::muon<scalar_type>()};
++    /// Offset added to the event number for the random seeds
++    std::uint64_t seed_offset = 0u;
+ 
+     // Simulation setup
+     bool do_energy_loss = true;
+@@ -114,8 +117,8 @@ struct simulator {
+                                             m_directory);
+ 
+       // Set random seed
+-      m_scatterer.set_seed(event_id);
+-      writer_state.set_seed(event_id);
++      m_scatterer.set_seed(m_cfg.seed_offset + event_id);
++      writer_state.set_seed(m_cfg.seed_offset + event_id);
+ 
+       auto actor_states = detray::tie(m_updater_state, m_scatterer,
+                                       m_aborter_state, writer_state);
