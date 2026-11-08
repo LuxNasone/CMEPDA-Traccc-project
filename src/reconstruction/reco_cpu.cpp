@@ -49,6 +49,11 @@
 #include <iostream>
 #include <memory>
 
+// Output folder for the CSV files, set by CMake (see CMakeLists.txt).
+#ifndef RECO_DATA_DIR
+#define RECO_DATA_DIR "data"
+#endif
+
 int seq_run(const traccc::opts::detector& detector_opts,
             const traccc::opts::magnetic_field& bfield_opts,
             const traccc::opts::input_data& input_opts,
@@ -292,9 +297,14 @@ int seq_run(const traccc::opts::detector& detector_opts,
     copy(track_states_buffer.tracks, track_states_alpaka.tracks)->wait();
     copy(track_states_buffer.states, track_states_alpaka.states)->wait();
     queue.synchronize();
-        // Link the fitted tracks to the measurements of the event, then save them.
-    track_states_alpaka.measurements = vecmem::get_data(measurements_per_event_alpaka);
-    reco::write_tracks_csv(input_opts.directory, event, traccc::edm::track_container<traccc::default_algebra>::const_data{track_states_alpaka});
+
+    // Link the fitted tracks to the measurements of the event, then save them.
+    track_states_alpaka.measurements =
+        vecmem::get_data(measurements_per_event_alpaka);
+    reco::write_tracks_csv(
+        RECO_DATA_DIR "/reco_cpu", event,
+        traccc::edm::track_container<traccc::default_algebra>::const_data{
+            track_states_alpaka});
 
     /// Statistics
     n_measurements_alpaka += measurements_per_event_alpaka.size();

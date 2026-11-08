@@ -12,13 +12,36 @@ The project hosted and developed in this repository is a test of the performance
   - CUDA 12.6 or above
   - Boost 1.78 or above
 
-### Command line options
+### Workflow
+
+- Simulation : set details in toy_mc.conf
+  sh
+  export TRACCC_TEST_DATA_DIR=$PWD/data
+  mkdir -p data/run && cd data/run
+  ../../traccc-build/bin/traccc_toy_mc ../../config/toy_mc.conf
+  cd ../..
+
+- Digitization : set details in toy_digitization.conf
+  sh
+  python3 src/digitization/toy_digitize.py data/run --config config/toy_digitization.conf
 
 - CPU
   sh
-  cmake --preset alpaka-fp32 -S acts/Traccc -B traccc-build
-  cmake --build traccc-build --target traccc_toy_mc traccc_seq_example_alpaka \
-  traccc_throughput_mt_alpaka -j 2
+  data=$(realpath data/run)
+
+  ./traccc-build/bin/traccc_reco_cpu \
+    --detector-file=$data/toy_detector_geometry.json \
+    --material-file=$data/toy_detector_homogeneous_material.json \
+    --grid-file=$data/toy_detector_surface_grids.json \
+    --digitization-file=$data/toy_digitization.json \
+    --conditions-file=$data/toy_digitization.json \
+    --use-acts-geom-source=false \
+    --input-directory=$data/ \
+    --seedfinder-r-range=25:200 \
+    --finding-run-smoother=none \
+    --constraint-step-size-mm=1 \
+    --search-window=3:3 \
+    --input-events=NUMBER_OF_EVENTS
 
 - GPU
   sh
@@ -39,17 +62,6 @@ The project hosted and developed in this repository is a test of the performance
   export LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64:$HOME/local/lib:$LD_LIBRARY_PATH
   export LD_LIBRARY_PATH=$HOME/Exam_2/traccc-build/gnu_13.3_cxx20_64_relwithdebinfo:$LD_LIBRARY_PATH
 
-- Simulation
-  sh
-  export TRACCC_TEST_DATA_DIR=$PWD/data
-  mkdir -p data/NOME_RUN && cd data/NOME_RUN
-  ../../traccc-build/bin/traccc_toy_mc ../../config/toy_mc.conf
-  cd ../..
-
-- Digitization
-  sh
-  python src/digitization/toy_digitizer.py data/NOME_RUN --config config/digitization.conf
-
 - Reconstruction
   sh
   D=$PWD/data/NOME_RUN
@@ -66,8 +78,6 @@ The project hosted and developed in this repository is a test of the performance
   --finding-run-smoother=none \
   --constraint-step-size-mm=1 --search-window 3:3
 
-Also use --use-acts-geom-source=false, --seedfinder-r-range=25:200, --finding-run-smoother=none
-
 - Throughput 
-  ./run_throughput.sh cuda data/NOME_RUN
-  ./run_throughput.sh alpaka data/NOME_RUN --cpu-threads=8
+  ./run_throughput.sh cuda data/run
+  ./run_throughput.sh alpaka data/run --cpu-threads=8

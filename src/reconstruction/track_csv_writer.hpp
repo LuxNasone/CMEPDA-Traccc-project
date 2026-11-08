@@ -36,11 +36,11 @@ inline void write_tracks_csv(
   const traccc::edm::track_container<traccc::default_algebra>::const_device tracks{
       tracks_view};
 
+  std::filesystem::create_directories(directory);
   const auto path = [&](std::string_view suffix) {
-    return traccc::io::get_absolute_path(
-        (std::filesystem::path(directory) /
-         traccc::io::get_event_filename(event, suffix))
-            .native());
+    return (std::filesystem::path(directory) /
+            traccc::io::get_event_filename(event, suffix))
+        .string();
   };
 
   std::ofstream track_file{path("-tracks.csv")};
