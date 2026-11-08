@@ -62,6 +62,11 @@
 #include <iostream>
 #include <memory>
 
+// Output folder for the CSV files, set by CMake (see CMakeLists.txt).
+#ifndef RECO_DATA_DIR
+#define RECO_DATA_DIR "data"
+#endif
+
 int seq_run(const traccc::opts::detector& detector_opts,
             const traccc::opts::magnetic_field& bfield_opts,
             const traccc::opts::input_data& input_opts,
@@ -301,7 +306,7 @@ int seq_run(const traccc::opts::detector& detector_opts,
     track_states_cuda.measurements =
         vecmem::get_data(measurements_per_event_cuda);
     reco::write_tracks_csv(
-        input_opts.directory, event,
+        RECO_DATA_DIR "/reco_gpu", event,
         traccc::edm::track_container<traccc::default_algebra>::const_data{
             track_states_cuda});
 
