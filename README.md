@@ -25,8 +25,11 @@ The project hosted and developed in this repository is a test of the performance
   sh
   python3 src/digitization/toy_digitize.py data/run --config config/toy_digitization.conf
 
-- CPU
+- CPU : compilation and execution
   sh
+  cmake traccc-build
+  cmake --build traccc-build -j8 --target traccc_reco_cpu 
+
   data=$(realpath data/run)
 
   ./traccc-build/bin/traccc_reco_cpu \
@@ -43,18 +46,26 @@ The project hosted and developed in this repository is a test of the performance
     --search-window=3:3 \
     --input-events=NUMBER_OF_EVENTS
 
-- GPU
+- GPU: compilation and execution 
   sh
-  cmake --preset cuda-fp32 -S acts/Traccc -B traccc-build \
-  -DCMAKE_CUDA_COMPILER=/usr/local/cuda-13.0/bin/nvcc \
-  -DCUDAToolkit_ROOT=/usr/local/cuda-13.0 \
-  -DCMAKE_CUDA_ARCHITECTURES=native \
-  -DTRACCC_BUILD_ALPAKA=TRUE -DTRACCC_SETUP_ALPAKA=TRUE -DTRACCC_USE_SYSTEM_ALPAKA=FALSE \
-  -DBoost_ROOT=$HOME/local -DCMAKE_PREFIX_PATH="$HOME/local;/usr/local/cuda-13.0" \
-  -DACTS_USE_SYSTEM_EIGEN3=OFF \
-  -DACTS_CODEGEN_PREBUILT_DIR=$PWD/prebuilt-codegen
-  cmake --build traccc-build --target traccc_toy_mc traccc_seq_example_cuda \
-  traccc_throughput_mt_cuda traccc_seq_example_alpaka traccc_throughput_mt_alpaka -j 2
+  cmake traccc-build
+  cmake --build traccc-build -j8 --target traccc_reco_gpu
+
+  data=$(realpath data/run)
+
+  ./traccc-build/bin/traccc_reco_gpu \
+    --detector-file=$data/toy_detector_geometry.json \
+    --material-file=$data/toy_detector_homogeneous_material.json \
+    --grid-file=$data/toy_detector_surface_grids.json \
+    --digitization-file=$data/toy_digitization.json \
+    --conditions-file=$data/toy_digitization.json \
+    --use-acts-geom-source=false \
+    --input-directory=$data/ \
+    --seedfinder-r-range=25:200 \
+    --finding-run-smoother=none \
+    --constraint-step-size-mm=1 \
+    --search-window=3:3 \
+    --input-events=2 2>&1 | tee data/reco_gpu/log.txt 
 
 - Server environmental variables (in `~/.bashrc`):
   sh
