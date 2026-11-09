@@ -6,11 +6,14 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Versione CUDA dell'esempio "seq_example" con scrittura delle tracce fittate
-// in CSV (stessa catena e stesso output della versione Alpaka).
+/**
+ * @file reco_gpu.cpp
+ * @brief Reconstruction chain run on the GPU through the CUDA algorithms.
+ *        The chain itself is in reco.hpp; this file only defines the backend.
+ */
 
 // Project include(s).
-#include "track_csv_writer.hpp"
+#include "reco.hpp"
 #include "traccc/cuda/clusterization/clusterization_algorithm.hpp"
 #include "traccc/cuda/clusterization/measurement_sorting_algorithm.hpp"
 #include "traccc/cuda/finding/combinatorial_kalman_filter_algorithm.hpp"
@@ -21,33 +24,6 @@
 #include "traccc/cuda/seeding/triplet_seeding_algorithm.hpp"
 #include "traccc/cuda/utils/make_magnetic_field.hpp"
 #include "traccc/cuda/utils/stream_wrapper.hpp"
-#include "traccc/device/container_d2h_copy_alg.hpp"
-#include "traccc/efficiency/seeding_performance_writer.hpp"
-#include "traccc/examples/make_magnetic_field.hpp"
-#include "traccc/fitting/kalman_filter/kalman_fitter.hpp"
-#include "traccc/gbts_seeding/gbts_seeding_config.hpp"
-#include "traccc/geometry/detector.hpp"
-#include "traccc/geometry/detector_buffer.hpp"
-#include "traccc/geometry/host_detector.hpp"
-#include "traccc/io/read_cells.hpp"
-#include "traccc/io/read_detector.hpp"
-#include "traccc/io/read_detector_description.hpp"
-#include "traccc/io/utils.hpp"
-#include "traccc/options/accelerator.hpp"
-#include "traccc/options/clusterization.hpp"
-#include "traccc/options/detector.hpp"
-#include "traccc/options/input_data.hpp"
-#include "traccc/options/magnetic_field.hpp"
-#include "traccc/options/performance.hpp"
-#include "traccc/options/program_options.hpp"
-#include "traccc/options/track_finding.hpp"
-#include "traccc/options/track_fitting.hpp"
-#include "traccc/options/track_gbts_seeding.hpp"
-#include "traccc/options/track_propagation.hpp"
-#include "traccc/options/track_seeding.hpp"
-#include "traccc/performance/container_comparator.hpp"
-#include "traccc/performance/timer.hpp"
-#include "traccc/utils/propagation.hpp"
 
 // VecMem include(s).
 #include <vecmem/memory/cuda/device_memory_resource.hpp>
@@ -56,327 +32,50 @@
 #include <vecmem/utils/cuda/async_copy.hpp>
 #include <vecmem/utils/cuda/stream_wrapper.hpp>
 
-// System include(s).
-#include <exception>
-#include <iomanip>
-#include <iostream>
-#include <memory>
+/// Backend running the traccc CUDA algorithms.
+struct cuda_backend {
+    static constexpr const char* name = "cuda";
+    static constexpr const char* output_dir = RECO_DATA_DIR "/reco_gpu";
 
-// Output folder for the CSV files, set by CMake (see CMakeLists.txt).
-#ifndef RECO_DATA_DIR
-#define RECO_DATA_DIR "data"
-#endif
+    // Algorithm types.
+    using clusterization = traccc::cuda::clusterization_algorithm;
+    using meas_sorting = traccc::cuda::measurement_sorting_algorithm;
+    using sp_formation =
+        traccc::cuda::silicon_pixel_spacepoint_formation_algorithm;
+    using triplet_seeding = traccc::cuda::triplet_seeding_algorithm;
+    using gbts_seeding = traccc::cuda::gbts_seeding_algorithm;
+    using param_estim = traccc::cuda::seed_parameter_estimation_algorithm;
+    using finding = traccc::cuda::combinatorial_kalman_filter_algorithm;
+    using fitting = traccc::cuda::kalman_fitting_algorithm;
 
-int seq_run(const traccc::opts::detector& detector_opts,
-            const traccc::opts::magnetic_field& bfield_opts,
-            const traccc::opts::input_data& input_opts,
-            const traccc::opts::clusterization& clusterization_opts,
-            const traccc::opts::track_seeding& seeding_opts,
-            const traccc::opts::track_gbts_seeding& seeding_gbts_opts,
-            const traccc::opts::track_finding& finding_opts,
-            const traccc::opts::track_propagation& propagation_opts,
-            const traccc::opts::track_fitting& fitting_opts,
-            const traccc::opts::performance& performance_opts,
-            const traccc::opts::accelerator& accelerator_opts,
-            std::unique_ptr<const traccc::Logger> ilogger, bool usingGBTS) {
-  TRACCC_LOCAL_LOGGER(std::move(ilogger));
+    // Members are constructed top to bottom: stream, copy, then memory.
+    vecmem::cuda::stream_wrapper m_vecmem_stream;
+    traccc::cuda::stream_wrapper m_stream{m_vecmem_stream.stream()};
+    vecmem::cuda::async_copy m_copy{m_stream.cudaStream()};
+    vecmem::host_memory_resource m_host_mr;
+    vecmem::cuda::host_memory_resource m_pinned_mr;  // pinned host memory
+    vecmem::cuda::device_memory_resource m_device_mr;
+    traccc::memory_resource m_mr{m_device_mr, &m_pinned_mr};
 
-  // CUDA stream e oggetti di copia.
-  vecmem::cuda::stream_wrapper vecmem_stream;
-  traccc::cuda::stream_wrapper stream{vecmem_stream.stream()};
-  vecmem::cuda::async_copy copy{stream.cudaStream()};
+    traccc::cuda::stream_wrapper& queue() { return m_stream; }
+    vecmem::copy& copy() { return m_copy; }
+    vecmem::memory_resource& host_mr() { return m_host_mr; }
+    vecmem::memory_resource& device_mr() { return m_device_mr; }
+    traccc::memory_resource& mr() { return m_mr; }
+    void synchronize() { m_stream.synchronize(); }
 
-  // Memory resources used by the application.
-  vecmem::host_memory_resource host_mr;
-  vecmem::cuda::host_memory_resource cuda_host_mr;  // memoria pinned
-  vecmem::cuda::device_memory_resource device_mr;
-  traccc::memory_resource mr{device_mr, &cuda_host_mr};
-
-  // Construct the detector description object.
-  traccc::detector_design_description::host host_det_descr{host_mr};
-  traccc::detector_conditions_description::host host_det_cond{host_mr};
-  traccc::io::read_detector_description(
-      host_det_descr, host_det_cond, detector_opts.detector_file,
-      detector_opts.digitization_file, detector_opts.conditions_file,
-      traccc::data_format::json);
-  traccc::detector_design_description::buffer device_det_descr{
-      [&]() {
-        std::vector<unsigned int> sizes(host_det_descr.size());
-        for (std::size_t i = 0; i < host_det_descr.size(); ++i) {
-          auto this_design = host_det_descr.at(i);
-
-          sizes[i] = std::max(
-              static_cast<unsigned int>(((this_design.bin_edges_x()).size())),
-              static_cast<unsigned int>(((this_design.bin_edges_y()).size())));
-        }
-        return sizes;
-      }(),
-      device_mr, &host_mr, vecmem::data::buffer_type::resizable};
-  copy.setup(device_det_descr)->wait();
-  copy(vecmem::get_data(host_det_descr), device_det_descr)->wait();
-
-  traccc::detector_conditions_description::buffer device_det_cond{
-      static_cast<traccc::detector_conditions_description::buffer::size_type>(
-          host_det_cond.size()),
-      device_mr};
-  copy.setup(device_det_cond)->wait();
-  copy(vecmem::get_data(host_det_cond), device_det_cond,
-       vecmem::copy::type::host_to_device)
-      ->wait();
-
-  // Construct a Detray detector object.
-  traccc::host_detector host_det;
-  traccc::io::read_detector(host_det, host_mr, detector_opts.detector_file,
-                            detector_opts.material_file,
-                            detector_opts.grid_file);
-
-  const traccc::detector_buffer detector_buffer =
-      traccc::buffer_from_host_detector(host_det, device_mr, copy);
-  stream.synchronize();
-
-  // Output stats
-  std::uint64_t n_cells = 0;
-  std::uint64_t n_measurements_cuda = 0;
-  std::uint64_t n_spacepoints_cuda = 0;
-  std::uint64_t n_seeds_cuda = 0;
-  std::uint64_t n_found_tracks_cuda = 0;
-  std::uint64_t n_fitted_tracks_cuda = 0;
-
-  // Algorithm configuration(s).
-  const traccc::gbts_seedfinder_config gbts_config(seeding_gbts_opts);
-  const traccc::seedfinder_config seedfinder_config(seeding_opts);
-  const traccc::seedfilter_config seedfilter_config(seeding_opts);
-  const traccc::spacepoint_grid_config spacepoint_grid_config(seeding_opts);
-
-  detray::propagation::config propagation_config(propagation_opts);
-
-  traccc::finding_config finding_cfg(finding_opts);
-  finding_cfg.propagation = propagation_config;
-
-  traccc::fitting_config fitting_cfg(fitting_opts);
-  fitting_cfg.propagation = propagation_config;
-
-  // Campo magnetico: versione host + copia sul device (texture o global).
-  const auto host_field = traccc::details::make_magnetic_field(bfield_opts);
-  const auto field = traccc::cuda::make_magnetic_field(
-      host_field,
-      (accelerator_opts.use_gpu_texture_memory
-           ? traccc::cuda::magnetic_field_storage::texture_memory
-           : traccc::cuda::magnetic_field_storage::global_memory));
-
-  traccc::track_params_estimation_config track_params_estimation_config;
-
-  traccc::cuda::clusterization_algorithm ca_cuda(
-      mr, copy, stream, clusterization_opts,
-      logger().clone("CudaClusteringAlg"));
-  traccc::cuda::measurement_sorting_algorithm ms_cuda(
-      mr, copy, stream, logger().clone("CudaMeasSortingAlg"));
-  traccc::cuda::silicon_pixel_spacepoint_formation_algorithm sf_cuda(
-      mr, copy, stream, logger().clone("CudaSpFormationAlg"));
-  traccc::cuda::triplet_seeding_algorithm sa_cuda(
-      seedfinder_config, spacepoint_grid_config, seedfilter_config, mr, copy,
-      stream, logger().clone("CudaSeedingAlg"));
-  traccc::cuda::gbts_seeding_algorithm gbts_sa_cuda(
-      gbts_config, mr, copy, stream, logger().clone("CudaGbtsSeedingAlg"));
-  traccc::cuda::seed_parameter_estimation_algorithm tp_cuda(
-      track_params_estimation_config, mr, copy, stream,
-      logger().clone("CudaTrackParEstAlg"));
-  traccc::cuda::combinatorial_kalman_filter_algorithm finding_alg_cuda(
-      finding_cfg, mr, copy, stream, logger().clone("CudaFindingAlg"));
-  traccc::cuda::kalman_fitting_algorithm fitting_alg_cuda(
-      fitting_cfg, mr, copy, stream, logger().clone("CudaFittingAlg"));
-
-  // performance writer
-  traccc::seeding_performance_writer sd_performance_writer(
-      traccc::seeding_performance_writer::config{},
-      logger().clone("SeedingPerformanceWriter"));
-
-  traccc::performance::timing_info elapsedTimes;
-
-  // Loop over events
-  for (std::size_t event = input_opts.skip;
-       event < input_opts.events + input_opts.skip; ++event) {
-    // Instantiate CUDA containers/collections
-    traccc::edm::measurement_collection::buffer measurements_cuda_buffer;
-    traccc::edm::spacepoint_collection::buffer spacepoints_cuda_buffer;
-    traccc::edm::seed_collection::buffer seeds_cuda_buffer;
-    traccc::bound_track_parameters_collection_types::buffer
-        params_cuda_buffer(0, *mr.host);
-    traccc::edm::track_container<traccc::default_algebra>::buffer
-        track_candidates_buffer;
-    traccc::edm::track_container<traccc::default_algebra>::buffer
-        track_states_buffer;
-
-    {
-      traccc::performance::timer wall_t("Wall time", elapsedTimes);
-
-      traccc::edm::silicon_cell_collection::host cells_per_event{host_mr};
-
-      {
-        traccc::performance::timer t("File reading  (cpu)", elapsedTimes);
-        // Read the cells from the relevant event file into host memory.
-        static constexpr bool DEDUPLICATE = true;
-        traccc::io::read_cells(cells_per_event, event, input_opts.directory,
-                               logger().clone(), &host_det_cond,
-                               input_opts.format, DEDUPLICATE,
-                               input_opts.use_acts_geom_source);
-      }  // stop measuring file reading timer
-
-      n_cells += cells_per_event.size();
-
-      // Create device copy of input collections
-      traccc::edm::silicon_cell_collection::buffer cells_buffer(
-          static_cast<unsigned int>(cells_per_event.size()), mr.main);
-      copy.setup(cells_buffer)->wait();
-      copy(vecmem::get_data(cells_per_event), cells_buffer)->wait();
-
-      {
-        traccc::performance::timer t("Clusterization (cuda)", elapsedTimes);
-        auto unsorted_measurements =
-            ca_cuda(cells_buffer, device_det_descr, device_det_cond);
-        measurements_cuda_buffer = ms_cuda(unsorted_measurements);
-        stream.synchronize();
-      }
-
-      {
-        traccc::performance::timer t("Spacepoint formation (cuda)",
-                                     elapsedTimes);
-        spacepoints_cuda_buffer =
-            sf_cuda(detector_buffer, measurements_cuda_buffer);
-        stream.synchronize();
-      }
-
-      {
-        traccc::performance::timer t("Seeding (cuda)", elapsedTimes);
-        if (usingGBTS) {
-          seeds_cuda_buffer =
-              gbts_sa_cuda(spacepoints_cuda_buffer, measurements_cuda_buffer);
-        } else {
-          seeds_cuda_buffer = sa_cuda(spacepoints_cuda_buffer);
-        }
-        stream.synchronize();
-      }
-
-      {
-        traccc::performance::timer t("Track params (cuda)", elapsedTimes);
-        params_cuda_buffer =
-            tp_cuda(field, measurements_cuda_buffer, spacepoints_cuda_buffer,
-                    seeds_cuda_buffer);
-        stream.synchronize();
-      }
-
-      {
-        traccc::performance::timer timer{"Track finding (cuda)",
-                                         elapsedTimes};
-        track_candidates_buffer = finding_alg_cuda(
-            detector_buffer, field, measurements_cuda_buffer,
-            params_cuda_buffer);
-        stream.synchronize();
-      }
-
-      {
-        traccc::performance::timer timer{"Track fitting (cuda)",
-                                         elapsedTimes};
-        track_states_buffer =
-            fitting_alg_cuda(detector_buffer, field, track_candidates_buffer);
-        stream.synchronize();
-      }
-    }  // Stop measuring wall time
-
-    // Copia dei risultati device -> host.
-    traccc::edm::measurement_collection::host measurements_per_event_cuda{
-        host_mr};
-    traccc::edm::spacepoint_collection::host spacepoints_per_event_cuda{
-        host_mr};
-    traccc::edm::seed_collection::host seeds_cuda{host_mr};
-    traccc::edm::track_collection<traccc::default_algebra>::host
-        track_candidates_cuda{host_mr};
-    traccc::edm::track_container<traccc::default_algebra>::host
-        track_states_cuda{host_mr};
-
-    copy(measurements_cuda_buffer, measurements_per_event_cuda)->wait();
-    copy(spacepoints_cuda_buffer, spacepoints_per_event_cuda)->wait();
-    copy(seeds_cuda_buffer, seeds_cuda)->wait();
-    copy(track_candidates_buffer.tracks, track_candidates_cuda)->wait();
-    copy(track_states_buffer.tracks, track_states_cuda.tracks)->wait();
-    copy(track_states_buffer.states, track_states_cuda.states)->wait();
-    stream.synchronize();
-
-    // Link the fitted tracks to the measurements of the event, then save them.
-    track_states_cuda.measurements =
-        vecmem::get_data(measurements_per_event_cuda);
-    reco::write_tracks_csv(
-        RECO_DATA_DIR "/reco_gpu", event,
-        traccc::edm::track_container<traccc::default_algebra>::const_data{
-            track_states_cuda});
-
-    /// Statistics
-    n_measurements_cuda += measurements_per_event_cuda.size();
-    n_spacepoints_cuda += spacepoints_per_event_cuda.size();
-    n_seeds_cuda += seeds_cuda.size();
-    n_found_tracks_cuda += track_candidates_cuda.size();
-    n_fitted_tracks_cuda += track_states_cuda.tracks.size();
-
-    if (performance_opts.run) {
-      traccc::event_data evt_data(input_opts.directory, event, host_mr,
-                                  input_opts.use_acts_geom_source, &host_det,
-                                  input_opts.format, false);
-
-      sd_performance_writer.write(
-          vecmem::get_data(seeds_cuda),
-          vecmem::get_data(spacepoints_per_event_cuda),
-          vecmem::get_data(measurements_per_event_cuda), evt_data);
+    /// Copies the magnetic field to the GPU (texture or global memory).
+    template <typename F>
+    auto make_field(const F& host_field,
+                    const traccc::opts::accelerator& accelerator_opts) {
+        return traccc::cuda::make_magnetic_field(
+            host_field,
+            accelerator_opts.use_gpu_texture_memory
+                ? traccc::cuda::magnetic_field_storage::texture_memory
+                : traccc::cuda::magnetic_field_storage::global_memory);
     }
-  }
+};
 
-  if (performance_opts.run) {
-    sd_performance_writer.finalize();
-  }
-
-  TRACCC_INFO("==> Statistics ... ");
-  TRACCC_INFO("- read    " << n_cells << " cells");
-  TRACCC_INFO("- created (cuda)  " << n_measurements_cuda
-                                   << " measurements     ");
-  TRACCC_INFO("- created (cuda)  " << n_spacepoints_cuda
-                                   << " spacepoints     ");
-  TRACCC_INFO("- created (cuda)  " << n_seeds_cuda << " seeds");
-  TRACCC_INFO("- found (cuda)    " << n_found_tracks_cuda << " tracks");
-  TRACCC_INFO("- fitted (cuda)   " << n_fitted_tracks_cuda << " tracks");
-  TRACCC_INFO("==>Elapsed times... " << elapsedTimes);
-
-  return 0;
-}
-
-// The main routine
-//
 int main(int argc, char* argv[]) {
-  std::unique_ptr<const traccc::Logger> logger = traccc::getDefaultLogger(
-      "TracccExampleSeqCuda", traccc::Logging::Level::INFO);
-
-  // Program options.
-  traccc::opts::detector detector_opts;
-  traccc::opts::magnetic_field bfield_opts;
-  traccc::opts::input_data input_opts;
-  traccc::opts::clusterization clusterization_opts;
-  traccc::opts::track_seeding seeding_opts;
-  traccc::opts::track_gbts_seeding seeding_gbts_opts;
-  traccc::opts::track_finding finding_opts;
-  traccc::opts::track_propagation propagation_opts;
-  traccc::opts::track_fitting fitting_opts;
-  traccc::opts::performance performance_opts;
-  traccc::opts::accelerator accelerator_opts;
-  traccc::opts::program_options program_opts{
-      "Full Tracking Chain Using CUDA",
-      {detector_opts, bfield_opts, input_opts, clusterization_opts,
-       seeding_opts, seeding_gbts_opts, finding_opts, propagation_opts,
-       performance_opts, fitting_opts, accelerator_opts},
-      argc,
-      argv,
-      logger->cloneWithSuffix("Options")};
-
-  // Run the application.
-  return seq_run(detector_opts, bfield_opts, input_opts, clusterization_opts,
-                 seeding_opts, seeding_gbts_opts, finding_opts,
-                 propagation_opts, fitting_opts, performance_opts,
-                 accelerator_opts, logger->clone(), seeding_gbts_opts.useGBTS);
+    return reco::main<cuda_backend>(argc, argv);
 }
