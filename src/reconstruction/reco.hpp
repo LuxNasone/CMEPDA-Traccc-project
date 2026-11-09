@@ -8,9 +8,24 @@
 
 // Project include(s).
 #include "track_csv_writer.hpp"
+// reco.hpp is included before the backend headers, so every traccc type used
+// by the template must be declared here (non-dependent names are looked up
+// where the template is defined, not where it is instantiated).
+#include "traccc/edm/measurement_collection.hpp"
+#include "traccc/edm/seed_collection.hpp"
+#include "traccc/edm/silicon_cell_collection.hpp"
+#include "traccc/edm/spacepoint_collection.hpp"
+#include "traccc/edm/track_container.hpp"
+#include "traccc/edm/track_parameters.hpp"
+#include "traccc/finding/finding_config.hpp"
+#include "traccc/fitting/fitting_config.hpp"
+#include "traccc/seeding/detail/seeding_config.hpp"
+#include "traccc/seeding/detail/track_params_estimation_config.hpp"
+#include "traccc/utils/event_data.hpp"
+#include "traccc/utils/logging.hpp"
+#include "traccc/utils/memory_resource.hpp"
 #include "traccc/efficiency/seeding_performance_writer.hpp"
 #include "traccc/examples/make_magnetic_field.hpp"
-#include "traccc/seeding/detail/track_params_estimation_config.hpp"
 #include "traccc/fitting/kalman_filter/kalman_fitter.hpp"
 #include "traccc/gbts_seeding/gbts_seeding_config.hpp"
 #include "traccc/geometry/detector.hpp"
@@ -37,8 +52,12 @@
 
 // System include(s).
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -48,6 +67,37 @@
 #endif
 
 namespace reco {
+
+/// Times of the reconstruction steps of one event, in milliseconds.
+struct event_times {
+    double read = 0.;            ///< Reading the cells from file
+    double h2d = 0.;             ///< Copying the cells to the device
+    double clusterization = 0.;  ///< Clusterization + measurement sorting
+    double spacepoints = 0.;     ///< Spacepoint formation
+    double seeding = 0.;         ///< Seeding (triplet or GBTS)
+    double params = 0.;          ///< Track parameter estimation
+    double finding = 0.;         ///< Track finding (CKF)
+    double fitting = 0.;         ///< Track fitting (Kalman)
+    double wall = 0.;            ///< From reading to fitting (all of the above)
+    double d2h = 0.;             ///< Copying the results back to the host
+};
+
+/// Measures the time spent in a scope and stores it, in ms, in @p out.
+class scope_timer {
+   public:
+    explicit scope_timer(double& out) : m_out(out), m_start(clock::now()) {}
+    ~scope_timer() {
+        m_out = std::chrono::duration<double, std::milli>(clock::now() - m_start)
+                    .count();
+    }
+    scope_timer(const scope_timer&) = delete;
+    scope_timer& operator=(const scope_timer&) = delete;
+
+   private:
+    using clock = std::chrono::steady_clock;
+    double& m_out;
+    clock::time_point m_start;
+};
 
 /**
  * @brief Runs the full reconstruction chain with the given backend.
@@ -175,12 +225,12 @@ int run(const traccc::opts::detector& detector_opts,
     // Per-event performance file: one row per event, with the size of the
     // event (cells, measurements, ...) and the time of each step.
     std::filesystem::create_directories(Backend::output_dir);
-    const std::string perf_path = std::string(Backend::output_dir) + "/performance.csv";
+    const std::string perf_path =
+        std::string(Backend::output_dir) + "/performance.csv";
     std::ofstream perf_file{perf_path};
     if (!perf_file) {
         throw std::runtime_error("Cannot open " + perf_path);
     }
-    
     perf_file << "backend,event,n_cells,n_measurements,n_spacepoints,n_seeds,"
                  "n_found_tracks,n_fitted_tracks,t_read_ms,t_h2d_ms,"
                  "t_clusterization_ms,t_spacepoints_ms,t_seeding_ms,"
@@ -200,13 +250,18 @@ int run(const traccc::opts::detector& detector_opts,
         traccc::edm::track_container<traccc::default_algebra>::buffer
             track_states_buffer;
 
+        event_times times;
+        std::size_t n_cells_event = 0;
+
         {
             traccc::performance::timer wall_t("Wall time", elapsedTimes);
+            scope_timer wall_st(times.wall);
 
             traccc::edm::silicon_cell_collection::host cells_per_event{host_mr};
 
             {
                 traccc::performance::timer t("File reading", elapsedTimes);
+                scope_timer st(times.read);
                 static constexpr bool DEDUPLICATE = true;
                 traccc::io::read_cells(cells_per_event, event,
                                        input_opts.directory, logger().clone(),
@@ -215,16 +270,22 @@ int run(const traccc::opts::detector& detector_opts,
                                        input_opts.use_acts_geom_source);
             }
 
-            n_cells += cells_per_event.size();
+            n_cells_event = cells_per_event.size();
+            n_cells += n_cells_event;
 
             // Copy the cells to the device.
             traccc::edm::silicon_cell_collection::buffer cells_buffer(
                 static_cast<unsigned int>(cells_per_event.size()), mr.main);
-            copy.setup(cells_buffer)->wait();
-            copy(vecmem::get_data(cells_per_event), cells_buffer)->wait();
+            {
+                traccc::performance::timer t("H2D copy", elapsedTimes);
+                scope_timer st(times.h2d);
+                copy.setup(cells_buffer)->wait();
+                copy(vecmem::get_data(cells_per_event), cells_buffer)->wait();
+            }
 
             {
                 traccc::performance::timer t("Clusterization", elapsedTimes);
+                scope_timer st(times.clusterization);
                 auto unsorted_measurements =
                     ca(cells_buffer, device_det_descr, device_det_cond);
                 measurements_buffer = ms(unsorted_measurements);
@@ -234,12 +295,14 @@ int run(const traccc::opts::detector& detector_opts,
             {
                 traccc::performance::timer t("Spacepoint formation",
                                              elapsedTimes);
+                scope_timer st(times.spacepoints);
                 spacepoints_buffer = sf(detector_buffer, measurements_buffer);
                 be.synchronize();
             }
 
             {
                 traccc::performance::timer t("Seeding", elapsedTimes);
+                scope_timer st(times.seeding);
                 if (usingGBTS) {
                     seeds_buffer = gbts_sa(spacepoints_buffer, measurements_buffer);
                 } else {
@@ -250,6 +313,7 @@ int run(const traccc::opts::detector& detector_opts,
 
             {
                 traccc::performance::timer t("Track params", elapsedTimes);
+                scope_timer st(times.params);
                 params_buffer = tp(field, measurements_buffer, spacepoints_buffer,
                                    seeds_buffer);
                 be.synchronize();
@@ -257,6 +321,7 @@ int run(const traccc::opts::detector& detector_opts,
 
             {
                 traccc::performance::timer t("Track finding", elapsedTimes);
+                scope_timer st(times.finding);
                 track_candidates_buffer = finding_alg(
                     detector_buffer, field, measurements_buffer, params_buffer);
                 be.synchronize();
@@ -264,6 +329,7 @@ int run(const traccc::opts::detector& detector_opts,
 
             {
                 traccc::performance::timer t("Track fitting", elapsedTimes);
+                scope_timer st(times.fitting);
                 track_states_buffer =
                     fitting_alg(detector_buffer, field, track_candidates_buffer);
                 be.synchronize();
@@ -279,13 +345,16 @@ int run(const traccc::opts::detector& detector_opts,
         traccc::edm::track_container<traccc::default_algebra>::host track_states{
             host_mr};
 
-        copy(measurements_buffer, measurements_per_event)->wait();
-        copy(spacepoints_buffer, spacepoints_per_event)->wait();
-        copy(seeds_buffer, seeds)->wait();
-        copy(track_candidates_buffer.tracks, track_candidates)->wait();
-        copy(track_states_buffer.tracks, track_states.tracks)->wait();
-        copy(track_states_buffer.states, track_states.states)->wait();
-        be.synchronize();
+        {
+            scope_timer st(times.d2h);
+            copy(measurements_buffer, measurements_per_event)->wait();
+            copy(spacepoints_buffer, spacepoints_per_event)->wait();
+            copy(seeds_buffer, seeds)->wait();
+            copy(track_candidates_buffer.tracks, track_candidates)->wait();
+            copy(track_states_buffer.tracks, track_states.tracks)->wait();
+            copy(track_states_buffer.states, track_states.states)->wait();
+            be.synchronize();
+        }
 
         // Link the fitted tracks to the measurements of the event, then save them.
         track_states.measurements = vecmem::get_data(measurements_per_event);
@@ -300,6 +369,17 @@ int run(const traccc::opts::detector& detector_opts,
         n_seeds += seeds.size();
         n_found_tracks += track_candidates.size();
         n_fitted_tracks += track_states.tracks.size();
+
+        perf_file << Backend::name << ',' << event << ',' << n_cells_event << ','
+                  << measurements_per_event.size() << ','
+                  << spacepoints_per_event.size() << ',' << seeds.size() << ','
+                  << track_candidates.size() << ','
+                  << track_states.tracks.size() << ',' << times.read << ','
+                  << times.h2d << ',' << times.clusterization << ','
+                  << times.spacepoints << ',' << times.seeding << ','
+                  << times.params << ',' << times.finding << ','
+                  << times.fitting << ',' << times.wall << ',' << times.d2h
+                  << '\n';
 
         if (performance_opts.run) {
             traccc::event_data evt_data(input_opts.directory, event, host_mr,
@@ -331,36 +411,36 @@ int run(const traccc::opts::detector& detector_opts,
 /**
  * @brief Parses the command line options and runs the chain with @p Backend.
  */
-    template <typename Backend>
-    int main(int argc, char* argv[]) {
-        std::unique_ptr<const traccc::Logger> logger = traccc::getDefaultLogger(
-            std::string("TracccReco_") + Backend::name, traccc::Logging::Level::INFO);
+template <typename Backend>
+int main(int argc, char* argv[]) {
+    std::unique_ptr<const traccc::Logger> logger = traccc::getDefaultLogger(
+        std::string("TracccReco_") + Backend::name, traccc::Logging::Level::INFO);
 
-        traccc::opts::detector detector_opts;
-        traccc::opts::magnetic_field bfield_opts;
-        traccc::opts::input_data input_opts;
-        traccc::opts::clusterization clusterization_opts;
-        traccc::opts::track_seeding seeding_opts;
-        traccc::opts::track_gbts_seeding seeding_gbts_opts;
-        traccc::opts::track_finding finding_opts;
-        traccc::opts::track_propagation propagation_opts;
-        traccc::opts::track_fitting fitting_opts;
-        traccc::opts::performance performance_opts;
-        traccc::opts::accelerator accelerator_opts;
-        traccc::opts::program_options program_opts{
-            std::string("Full Tracking Chain (") + Backend::name + ")",
-            {detector_opts, bfield_opts, input_opts, clusterization_opts,
-            seeding_opts, seeding_gbts_opts, finding_opts, propagation_opts,
-            performance_opts, fitting_opts, accelerator_opts},
-            argc,
-            argv,
-            logger->cloneWithSuffix("Options")};
+    traccc::opts::detector detector_opts;
+    traccc::opts::magnetic_field bfield_opts;
+    traccc::opts::input_data input_opts;
+    traccc::opts::clusterization clusterization_opts;
+    traccc::opts::track_seeding seeding_opts;
+    traccc::opts::track_gbts_seeding seeding_gbts_opts;
+    traccc::opts::track_finding finding_opts;
+    traccc::opts::track_propagation propagation_opts;
+    traccc::opts::track_fitting fitting_opts;
+    traccc::opts::performance performance_opts;
+    traccc::opts::accelerator accelerator_opts;
+    traccc::opts::program_options program_opts{
+        std::string("Full Tracking Chain (") + Backend::name + ")",
+        {detector_opts, bfield_opts, input_opts, clusterization_opts,
+         seeding_opts, seeding_gbts_opts, finding_opts, propagation_opts,
+         performance_opts, fitting_opts, accelerator_opts},
+        argc,
+        argv,
+        logger->cloneWithSuffix("Options")};
 
-        return run<Backend>(detector_opts, bfield_opts, input_opts,
-                            clusterization_opts, seeding_opts, seeding_gbts_opts,
-                            finding_opts, propagation_opts, fitting_opts,
-                            performance_opts, accelerator_opts, logger->clone(),
-                            seeding_gbts_opts.useGBTS);
-    }
+    return run<Backend>(detector_opts, bfield_opts, input_opts,
+                        clusterization_opts, seeding_opts, seeding_gbts_opts,
+                        finding_opts, propagation_opts, fitting_opts,
+                        performance_opts, accelerator_opts, logger->clone(),
+                        seeding_gbts_opts.useGBTS);
+}
 
-} 
+}  // namespace reco
