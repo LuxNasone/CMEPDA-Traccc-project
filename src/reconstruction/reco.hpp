@@ -172,6 +172,20 @@ int run(const traccc::opts::detector& detector_opts,
 
     traccc::performance::timing_info elapsedTimes;
 
+    // Per-event performance file: one row per event, with the size of the
+    // event (cells, measurements, ...) and the time of each step.
+    std::filesystem::create_directories(Backend::output_dir);
+    const std::string perf_path = std::string(Backend::output_dir) + "/performance.csv";
+    std::ofstream perf_file{perf_path};
+    if (!perf_file) {
+        throw std::runtime_error("Cannot open " + perf_path);
+    }
+    
+    perf_file << "backend,event,n_cells,n_measurements,n_spacepoints,n_seeds,"
+                 "n_found_tracks,n_fitted_tracks,t_read_ms,t_h2d_ms,"
+                 "t_clusterization_ms,t_spacepoints_ms,t_seeding_ms,"
+                 "t_params_ms,t_finding_ms,t_fitting_ms,t_wall_ms,t_d2h_ms\n";
+
     // Loop over events.
     for (std::size_t event = input_opts.skip;
          event < input_opts.events + input_opts.skip; ++event) {
@@ -317,36 +331,36 @@ int run(const traccc::opts::detector& detector_opts,
 /**
  * @brief Parses the command line options and runs the chain with @p Backend.
  */
-template <typename Backend>
-int main(int argc, char* argv[]) {
-    std::unique_ptr<const traccc::Logger> logger = traccc::getDefaultLogger(
-        std::string("TracccReco_") + Backend::name, traccc::Logging::Level::INFO);
+    template <typename Backend>
+    int main(int argc, char* argv[]) {
+        std::unique_ptr<const traccc::Logger> logger = traccc::getDefaultLogger(
+            std::string("TracccReco_") + Backend::name, traccc::Logging::Level::INFO);
 
-    traccc::opts::detector detector_opts;
-    traccc::opts::magnetic_field bfield_opts;
-    traccc::opts::input_data input_opts;
-    traccc::opts::clusterization clusterization_opts;
-    traccc::opts::track_seeding seeding_opts;
-    traccc::opts::track_gbts_seeding seeding_gbts_opts;
-    traccc::opts::track_finding finding_opts;
-    traccc::opts::track_propagation propagation_opts;
-    traccc::opts::track_fitting fitting_opts;
-    traccc::opts::performance performance_opts;
-    traccc::opts::accelerator accelerator_opts;
-    traccc::opts::program_options program_opts{
-        std::string("Full Tracking Chain (") + Backend::name + ")",
-        {detector_opts, bfield_opts, input_opts, clusterization_opts,
-         seeding_opts, seeding_gbts_opts, finding_opts, propagation_opts,
-         performance_opts, fitting_opts, accelerator_opts},
-        argc,
-        argv,
-        logger->cloneWithSuffix("Options")};
+        traccc::opts::detector detector_opts;
+        traccc::opts::magnetic_field bfield_opts;
+        traccc::opts::input_data input_opts;
+        traccc::opts::clusterization clusterization_opts;
+        traccc::opts::track_seeding seeding_opts;
+        traccc::opts::track_gbts_seeding seeding_gbts_opts;
+        traccc::opts::track_finding finding_opts;
+        traccc::opts::track_propagation propagation_opts;
+        traccc::opts::track_fitting fitting_opts;
+        traccc::opts::performance performance_opts;
+        traccc::opts::accelerator accelerator_opts;
+        traccc::opts::program_options program_opts{
+            std::string("Full Tracking Chain (") + Backend::name + ")",
+            {detector_opts, bfield_opts, input_opts, clusterization_opts,
+            seeding_opts, seeding_gbts_opts, finding_opts, propagation_opts,
+            performance_opts, fitting_opts, accelerator_opts},
+            argc,
+            argv,
+            logger->cloneWithSuffix("Options")};
 
-    return run<Backend>(detector_opts, bfield_opts, input_opts,
-                        clusterization_opts, seeding_opts, seeding_gbts_opts,
-                        finding_opts, propagation_opts, fitting_opts,
-                        performance_opts, accelerator_opts, logger->clone(),
-                        seeding_gbts_opts.useGBTS);
-}
+        return run<Backend>(detector_opts, bfield_opts, input_opts,
+                            clusterization_opts, seeding_opts, seeding_gbts_opts,
+                            finding_opts, propagation_opts, fitting_opts,
+                            performance_opts, accelerator_opts, logger->clone(),
+                            seeding_gbts_opts.useGBTS);
+    }
 
 } 
