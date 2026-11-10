@@ -35,7 +35,7 @@
 /// Backend running the traccc CUDA algorithms.
 struct cuda_backend {
     static constexpr const char* name = "cuda";
-    static constexpr const char* output_dir = RECO_DATA_DIR "/reco_gpu";
+    static constexpr const char* output_dir = RECO_DATA_DIR "/reco_gpu_10";
 
     // Algorithm types.
     using clusterization = traccc::cuda::clusterization_algorithm;
