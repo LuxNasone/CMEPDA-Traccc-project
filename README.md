@@ -16,12 +16,10 @@ The project hosted and developed in this repository is a test of the performance
 
 - Simulation + Digitization : set details in simulation.conf
 
-  sh
-
   - Compilation : cmake --build traccc-build -j8 --target traccc_toy_mc 2>&1 
-  - Execution : ./run_simulation.sh
+  - Execution : ./exec/run_simulation.sh
 
 - Reconstruction (substitute gpu with cpu for cpu execution):
-  sh
+
   - Compilation : cmake --build traccc-build -j8 --target traccc_reco_gpu 2>&1
-  - Execution :  ./run_reco.sh gpu data/run_*
+  - Execution :  ./exec/run_reco.sh gpu data/run_*

@@ -2,10 +2,10 @@
 # Runs the toy MC simulation and then the digitization of its events, with the
 # options of one configuration file (default: config/simulation.conf).
 #
-# Usage: ./run_simulation.sh [config file] [key=value ...]
+# Usage: ./exec/run_simulation.sh [config file] [key=value ...]
 # Examples:
-#   ./run_simulation.sh
-#   ./run_simulation.sh config/simulation.conf gen-nparticles=500 output-directory=data/run_500
+#   ./exec/run_simulation.sh
+#   ./exec/run_simulation.sh config/simulation.conf gen-nparticles=500 output-directory=data/run_500
 #   pytest -q tests/ && for n in 10 50 100 500; do
 #       SKIP_TESTS=1 ./run_simulation.sh config/simulation.conf gen-nparticles=$n output-directory=data/run_$n
 #   done

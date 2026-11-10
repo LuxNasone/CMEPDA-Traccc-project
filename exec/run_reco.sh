@@ -3,11 +3,11 @@
 # saves the log and a copy of the per-event performance file in results/reco/,
 # because the program always writes to the same output folder.
 #
-# Usage: ./run_reco.sh <cpu|gpu> <data folder>... [-- extra traccc options]
+# Usage: ./exec/run_reco.sh <cpu|gpu> <data folder>... [-- extra traccc options]
 # Examples:
-#   ./run_reco.sh gpu data/data/run_10
-#   ./run_reco.sh gpu data/data/run_*
-#   ./run_reco.sh gpu data/data/run_* -- --input-events=5
+#   ./exec/run_reco.sh gpu data/data/run_10
+#   ./exec/run_reco.sh gpu data/data/run_*
+#   ./exec/run_reco.sh gpu data/data/run_* -- --input-events=5
 #
 # The traccc options are read from config/reco.conf (or from the file in the
 # RECO_CONFIG variable). RECO_OUT is the folder the program writes to, i.e.
