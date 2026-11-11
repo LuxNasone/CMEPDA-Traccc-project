@@ -53,9 +53,27 @@ def test_invalid_lines(tmp_path, text):
         read_config(write_config(tmp_path / "c.conf", text))
 
 
-def test_project_config_is_valid():
-    path = Path(__file__).resolve().parents[1] / "config" / "toy_digitization.conf"
-    build_digitizer(read_config(path))
+def digitization_section(path):
+    '''
+    Lines of the [digitization] section of config/simulation.conf, plus the seed
+    of the [common] section: the file that run_simulation.sh gives to toy_digitize.
+    '''
+    section, lines = None, []
+    for raw in path.read_text().splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1]
+        elif line and (section == "digitization"
+                       or (section == "common" and line.split("=")[0].strip() == "seed")):
+            lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
+def test_project_config_is_valid(tmp_path):
+    path = Path(__file__).resolve().parents[1] / "config" / "simulation.conf"
+    text = digitization_section(path)
+    assert "pitch-um" in text  # the [digitization] section was found
+    build_digitizer(read_config(write_config(tmp_path / "c.conf", text)))
 
 
 # build_digitizer
