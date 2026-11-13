@@ -8,6 +8,10 @@
 #   ./exec/run_reco.sh gpu data/data/run_10
 #   ./exec/run_reco.sh gpu data/data/run_*
 #   ./exec/run_reco.sh gpu data/data/run_* -- --input-events=5
+#   ./exec/run_reco.sh gpu data/data/run_* -- --input-events=100 --threads=4
+#
+# With --threads=N the results go to results/reco/threads_N/, so that runs
+# with a different number of threads do not overwrite each other.
 #
 # The traccc options are read from config/reco.conf (or from the file in the
 # RECO_CONFIG variable). RECO_OUT is the folder the program writes to, i.e.
@@ -39,10 +43,18 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# Number of threads, if given, to keep the results of different runs apart.
+threads_dir=""
+for arg in "${extra[@]+"${extra[@]}"}"; do
+    case "$arg" in
+        --threads=*) threads_dir="threads_${arg#--threads=}" ;;
+    esac
+done
+
 app=traccc-build/bin/traccc_reco_${backend}
 config=${RECO_CONFIG:-config/reco.conf}
 reco_out=${RECO_OUT:-data}/reco_${backend}
-results=results/reco
+results=results/reco${threads_dir:+/$threads_dir}
 
 if [ ! -x "$app" ]; then
     echo "Application not found: $app (run this script from the project folder)" >&2
@@ -80,7 +92,7 @@ for folder in "${folders[@]}"; do
         "--digitization-file=$data/toy_digitization.json"
         "--conditions-file=$data/toy_digitization.json"
         "--input-directory=$data/"
-        "${conf_options[@]}"
+        "${conf_options[@]+"${conf_options[@]}"}"
     )
 
     # An option given after "--" replaces the default with the same name:
@@ -100,7 +112,7 @@ for folder in "${folders[@]}"; do
     done
 
     log="$results/${backend}_${dataset}.log"
-    echo "==> $backend on $dataset"
+    echo "==> $backend on $dataset${threads_dir:+ ($threads_dir)}"
     # Remove the file of the previous dataset, so that it is never copied by mistake.
     rm -f "$reco_out/performance.csv"
     # A failure on one dataset must not stop the others.
@@ -123,4 +135,3 @@ if [ ${#failed[@]} -gt 0 ]; then
     echo "Failed datasets: ${failed[*]} (see the logs in $results)" >&2
     exit 1
 fi
-

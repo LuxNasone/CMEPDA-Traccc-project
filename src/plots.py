@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 ## Variables histogrammed by default
 DEFAULT_VARIABLES = ["n_spacepoints", "t_wall_ms"]
@@ -16,16 +17,18 @@ LABELS = {
 }
 
 
-def save_plot(fig, output):
+def save_plots(figs, output):
     '''
-    @brief saves the figure, overwriting the file if it already exists
-    @param fig : matplotlib figure to save
-    @param output : (str or Path) output file; the extension sets the format (.png, .pdf, ...)
+    @brief saves the figures in a single PDF file, one per page, overwriting it if it exists
+    @param figs : list of matplotlib figures to save, in page order
+    @param output : (str or Path) output PDF file
     '''
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)   # create the folder if missing
-    fig.savefig(output, dpi=150, bbox_inches="tight")  # savefig overwrites by default
-    print(f"Plot saved in {output}")
+    with PdfPages(output) as pdf:
+        for fig in figs:
+            pdf.savefig(fig, bbox_inches="tight")
+    print(f"{len(figs)} plots saved in {output}")
 
 
 def run_number(path):
@@ -72,8 +75,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Plots the performance files of the runs.")
     parser.add_argument("foldername", type=str, help="folder with performance files")
-    parser.add_argument("-o", "--output", default="results/plots",
-                        help="output folder of the plots (default: results/plots)")
+    parser.add_argument("-o", "--output", default="results",
+                        help="output folder of the PDF (default: results)")
     parser.add_argument("-v", "--variables", nargs="+", default=DEFAULT_VARIABLES,
                         help="variables to histogram (default: n_spacepoints t_wall_ms)")
     parser.add_argument("--bins", type=int, default=60, help="bins of the histograms (default: 60)")
@@ -87,15 +90,18 @@ if __name__ == "__main__":
     if not files:
         raise SystemExit(f"No .csv files in {args.foldername}")
 
-    output = Path(args.output)
+    # Output PDF named after the analysed folder (data/run_100ev/ -> run_100ev.pdf)
+    folder_name = Path(args.foldername).resolve().name
+    output = Path(args.output) / f"{folder_name}.pdf"
 
     # One DataFrame per run, without the warm-up event
     runs = [(path.stem, pd.read_csv(path).iloc[1:]) for path in files]
 
+    figs = []
+
     # Overlaid histograms: one figure per variable
     for variable in args.variables:
-        hist_fig = plot_overlaid_histograms(runs, variable, args.bins, args.logx)
-        save_plot(hist_fig, output / f"hist_{variable}.png")
+        figs.append(plot_overlaid_histograms(runs, variable, args.bins, args.logx))
 
     # Mean reconstruction time of each run
     fig, ax = plt.subplots(figsize=(7, 5))
@@ -108,6 +114,9 @@ if __name__ == "__main__":
     ax.legend(fontsize=7)
 
     fig.tight_layout()
-    save_plot(fig, output / "reconstruction_time.png")
+    figs.append(fig)
+
+    # All the plots in one PDF, one per page
+    save_plots(figs, output)
     if args.show:
         plt.show()

@@ -32,10 +32,11 @@
 #include <vecmem/utils/cuda/async_copy.hpp>
 #include <vecmem/utils/cuda/stream_wrapper.hpp>
 
-/// Backend running the traccc CUDA algorithms.
+/// Backend running the traccc CUDA algorithms. Every thread of reco.hpp
+/// creates its own instance, i.e. its own CUDA stream.
 struct cuda_backend {
     static constexpr const char* name = "cuda";
-    static constexpr const char* output_dir = RECO_DATA_DIR "/reco_gpu_10";
+    static constexpr const char* output_dir = RECO_DATA_DIR "/reco_gpu";
 
     // Algorithm types.
     using clusterization = traccc::cuda::clusterization_algorithm;

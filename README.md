@@ -22,4 +22,4 @@ The project hosted and developed in this repository is a test of the performance
 - Reconstruction (substitute gpu with cpu for cpu execution):
 
   - Compilation : cmake --build traccc-build -j8 --target traccc_reco_gpu 2>&1
-  - Execution :  ./exec/run_reco.sh gpu data/run_*
+  - Execution :  ./exec/run_reco.sh gpu data/run_* --input_event (NUMEROEVENTI)
