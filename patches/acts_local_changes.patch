@@ -38,7 +38,7 @@ index d38092e09..b2cf31be8 100644
     LINK_LIBRARIES vecmem::core vecmem::cuda traccc::io traccc::performance
                    traccc::core traccc::device_common traccc::cuda_utils traccc::cuda
 diff --git a/Traccc/examples/simulation/CMakeLists.txt b/Traccc/examples/simulation/CMakeLists.txt
-index b642bd070..95758c1f5 100644
+index b642bd070..4b0b7af3a 100644
 --- a/Traccc/examples/simulation/CMakeLists.txt
 +++ b/Traccc/examples/simulation/CMakeLists.txt
 @@ -27,3 +27,9 @@ traccc_add_executable(simulate_wire_chamber "simulate_wire_chamber.cpp"
@@ -47,7 +47,7 @@ index b642bd070..95758c1f5 100644
  )
 +
 +traccc_add_executable(toy_mc
-+    "/home/lux_n/MasterProjects/CMEPDA/Exam_2/src/simulation/ToyMC.cpp"
++    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/simulation/ToyMC.cpp"
 +    LINK_LIBRARIES vecmem::core traccc::io traccc::core
 +    traccc::options traccc::simulation detray::io detray::test_common covfie::core Boost::filesystem
 +)
