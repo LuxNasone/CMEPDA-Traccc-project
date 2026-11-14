@@ -7,13 +7,17 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
-## Variables histogrammed by default
-DEFAULT_VARIABLES = ["n_spacepoints", "t_wall_ms"]
-
-## Axis labels of the variables; the others use the column name
-LABELS = {
-    "n_spacepoints": "# Spacepoints",
-    "t_wall_ms": "Reconstruction time [ms]",
+## Reconstruction steps, in chain order, with their labels. File reading is
+## kept apart: it is the same for every algorithm and depends on the disk.
+STEPS = {
+    "t_h2d_ms": "H2D copy",
+    "t_clusterization_ms": "Clusterization",
+    "t_spacepoints_ms": "Spacepoint formation",
+    "t_seeding_ms": "Seeding",
+    "t_params_ms": "Track params",
+    "t_finding_ms": "Track finding",
+    "t_fitting_ms": "Track fitting",
+    "t_d2h_ms": "D2H copy",
 }
 
 
@@ -35,88 +39,183 @@ def run_number(path):
     '''
     @brief number of particles of a run, read from its name (gpu_run_500.csv -> 500)
     @param path : Path of the performance file
-    @return (int) the number in the name, or 0 if there is none
+    @return (int) the number in the name, or None if there is none
     '''
     match = re.search(r"(\d+)$", path.stem)
-    return int(match.group(1)) if match else 0
+    return int(match.group(1)) if match else None
 
 
-def plot_overlaid_histograms(runs, variable, bins=60, log_x=False):
+def drop_warmup(data):
     '''
-    @brief draws the histogram of one variable for every run, overlaid in one figure
-    @param runs : list of (label, DataFrame) pairs, one per run
-    @param variable : column to histogram, e.g. "t_wall_ms"
-    @param bins : number of bins, the same for all the runs
-    @param log_x : if True, logarithmic x axis and logarithmic bins
+    @brief removes the warm-up events: the first event of every thread pays
+           the start-up costs (CUDA context, caches) and is not representative
+    @param data : DataFrame of one performance file
+    @return the DataFrame without the warm-up events
+    '''
+    if {"thread", "t_start_ms"}.issubset(data.columns):
+        first = data.groupby("thread")["t_start_ms"].idxmin()
+        return data.drop(index=first)
+    return data.iloc[1:]   # old files, one thread: the first row
+
+
+def summarize(path):
+    '''
+    @brief reads one performance file and summarizes its events
+    @param path : Path of the performance file
+    @return (dict) particles, median spacepoints, median and 16-84% band of
+            the reconstruction time, median time of every step, throughput
+    '''
+    data = drop_warmup(pd.read_csv(path))
+    if data.empty:
+        raise ValueError(f"{path}: no events left after removing the warm-up")
+
+    steps = [c for c in STEPS if c in data.columns]
+    # Reconstruction time: from the cells in memory to the fitted tracks in
+    # memory, i.e. without reading the file and writing the CSV.
+    t_reco = data[steps].sum(axis=1)
+
+    row = {
+        "run": path.stem,
+        "particles": run_number(path),
+        "events": len(data),
+        "n_spacepoints": data["n_spacepoints"].median(),
+        "t_reco_ms": t_reco.median(),
+        "t_reco_lo_ms": t_reco.quantile(0.16),
+        "t_reco_hi_ms": t_reco.quantile(0.84),
+        "t_read_ms": data["t_read_ms"].median(),
+    }
+    for step in steps:
+        row[step] = data[step].median()
+
+    # Throughput: events finished per second of loop time (needs the
+    # per-event start/end times of the multi-thread version).
+    if {"t_start_ms", "t_end_ms"}.issubset(data.columns):
+        span = data["t_end_ms"].max() - data["t_start_ms"].min()
+        row["events_per_s"] = 1000. * len(data) / span if span > 0 else np.nan
+    return row
+
+
+def load_series(folder):
+    '''
+    @brief summarizes every performance file of a folder, one row per run
+    @param folder : (str or Path) folder with the .csv performance files
+    @return DataFrame sorted by number of spacepoints
+    '''
+    files = [p for p in Path(folder).glob("*.csv") if run_number(p) is not None]
+    if not files:
+        raise SystemExit(f"No performance .csv files in {folder}")
+    return pd.DataFrame([summarize(p) for p in files]).sort_values("n_spacepoints")
+
+
+def plot_reco_time(series):
+    '''
+    @brief median reconstruction time per event against the event size, one
+           line per series, with the 16-84% band of the events as error bars
+    @param series : dict label -> summary DataFrame
     @return the matplotlib figure
     '''
-    values = pd.concat([data[variable] for _, data in runs])
-    low, high = values.min(), values.max()
-    # The same bins for all the runs, so that the histograms can be compared
-    if log_x:
-        edges = np.geomspace(max(low, 1e-6), high, bins + 1)
-    else:
-        edges = np.linspace(low, high, bins + 1)
-
     fig, ax = plt.subplots(figsize=(7, 5))
-    for label, data in runs:
-        ax.hist(data[variable], bins=edges, histtype="step", linewidth=1.5, label=label)
+    for label, s in series.items():
+        err = [s["t_reco_ms"] - s["t_reco_lo_ms"], s["t_reco_hi_ms"] - s["t_reco_ms"]]
+        ax.errorbar(s["n_spacepoints"], s["t_reco_ms"], yerr=err, marker="o",
+                    capsize=3, label=label)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Spacepoints per event (median)")
+    ax.set_ylabel("Reconstruction time per event [ms]")
+    ax.set_title("Reconstruction time, file reading excluded")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    return fig
 
-    if log_x:
-        ax.set_xscale("log")
-    ax.set_xlabel(LABELS.get(variable, variable))
-    ax.set_ylabel("events")
-    ax.legend(fontsize=7)
+
+def plot_breakdown(label, s):
+    '''
+    @brief share of every step in the time of one event, for every run of a
+           series: shows which step dominates as the events grow
+    @param label : name of the series
+    @param s : summary DataFrame of the series
+    @return the matplotlib figure
+    '''
+    steps = [c for c in STEPS if c in s.columns]
+    x = np.arange(len(s))
+    fig, ax = plt.subplots(figsize=(7, 5))
+    bottom = np.zeros(len(s))
+    # File reading first, hatched: it is part of the event time but not of
+    # the reconstruction.
+    ax.bar(x, s["t_read_ms"], color="lightgrey", hatch="//", edgecolor="grey",
+           label="File reading")
+    bottom += s["t_read_ms"].to_numpy()
+    for step in steps:
+        ax.bar(x, s[step], bottom=bottom, label=STEPS[step])
+        bottom += s[step].to_numpy()
+    ax.set_xticks(x, [f"{p}" if pd.notna(p) else r for p, r in zip(s["particles"], s["run"])])
+    ax.set_xlabel("Particles per event")
+    ax.set_ylabel("Median time per event [ms]")
+    ax.set_title(f"Time per step ({label})")
+    # Legend outside the axes, so that it never covers the bars
+    ax.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.01, 1))
+    fig.tight_layout()
+    return fig
+
+
+def plot_throughput(series):
+    '''
+    @brief events per second against the event size, one line per series
+    @param series : dict label -> summary DataFrame (only those with throughput)
+    @return the matplotlib figure
+    '''
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for label, s in series.items():
+        ax.plot(s["n_spacepoints"], s["events_per_s"], marker="o", label=label)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Spacepoints per event (median)")
+    ax.set_ylabel("Throughput [events/s]")
+    ax.set_title("Throughput, file reading included")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend()
     fig.tight_layout()
     return fig
 
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description="Plots the performance files of the runs.")
-    parser.add_argument("foldername", type=str, help="folder with performance files")
+    parser = argparse.ArgumentParser(
+        description="Plots the performance files of the runs. Every folder is "
+                    "one series (e.g. cpu, gpu, gpu with 4 threads).")
+    parser.add_argument("folders", nargs="+", help="folders with performance files")
+    parser.add_argument("-l", "--labels", nargs="+",
+                        help="legend label of every folder (default: folder names)")
+    parser.add_argument("-n", "--name", default=None,
+                        help="name of the PDF (default: names of the folders)")
     parser.add_argument("-o", "--output", default="results",
                         help="output folder of the PDF (default: results)")
-    parser.add_argument("-v", "--variables", nargs="+", default=DEFAULT_VARIABLES,
-                        help="variables to histogram (default: n_spacepoints t_wall_ms)")
-    parser.add_argument("--bins", type=int, default=60, help="bins of the histograms (default: 60)")
-    parser.add_argument("--logx", action="store_true", help="logarithmic x axis")
     parser.add_argument("--show", action="store_true", help="also open the plots on screen")
     args = parser.parse_args()
 
-    # Runs sorted by number of particles (run_50 before run_100)
-    files = sorted(Path(args.foldername).glob("*.csv"), key=run_number)
+    labels = args.labels or [Path(f).resolve().name for f in args.folders]
+    if len(labels) != len(args.folders):
+        raise SystemExit("Give one label per folder")
 
-    if not files:
-        raise SystemExit(f"No .csv files in {args.foldername}")
+    series = {label: load_series(folder) for label, folder in zip(labels, args.folders)}
 
-    # Output PDF named after the analysed folder (data/run_100ev/ -> run_100ev.pdf)
-    folder_name = Path(args.foldername).resolve().name
-    output = Path(args.output) / f"{folder_name}.pdf"
+    figs = [plot_reco_time(series)]
+    figs += [plot_breakdown(label, s) for label, s in series.items()]
+    with_throughput = {l: s for l, s in series.items()
+                       if "events_per_s" in s and s["events_per_s"].notna().any()}
+    if with_throughput:
+        figs.append(plot_throughput(with_throughput))
 
-    # One DataFrame per run, without the warm-up event
-    runs = [(path.stem, pd.read_csv(path).iloc[1:]) for path in files]
-
-    figs = []
-
-    # Overlaid histograms: one figure per variable
-    for variable in args.variables:
-        figs.append(plot_overlaid_histograms(runs, variable, args.bins, args.logx))
-
-    # Mean reconstruction time of each run
-    fig, ax = plt.subplots(figsize=(7, 5))
-    for label, data in runs:
-        data_average = data.mean(numeric_only=True)
-        ax.scatter(data_average["n_spacepoints"], data_average["t_wall_ms"], label=label, s=12)
-
-    ax.set_xlabel(LABELS["n_spacepoints"])
-    ax.set_ylabel(LABELS["t_wall_ms"])
-    ax.legend(fontsize=7)
-
-    fig.tight_layout()
-    figs.append(fig)
-
-    # All the plots in one PDF, one per page
+    name = args.name or "_vs_".join(labels)
+    output = Path(args.output) / f"{name}.pdf"
     save_plots(figs, output)
+
+    # The numbers behind the plots, for the report.
+    table = pd.concat(series, names=["series"]).reset_index(level=0)
+    table.to_csv(output.with_suffix(".csv"), index=False, float_format="%.4g")
+    print(f"Summary table saved in {output.with_suffix('.csv')}")
+
     if args.show:
         plt.show()

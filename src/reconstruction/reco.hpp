@@ -189,7 +189,7 @@ class worker {
         std::declval<const host_field_t&>(),
         std::declval<const traccc::opts::accelerator&>()));
 
-    worker(shared_inputs& in, const traccc::Logger& log)
+    worker(shared_inputs& in, const traccc::Logger& parent_log)
         : m_in(in),
           m_det_descr(design_sizes(in.det_descr), m_be.device_mr(),
                       &m_be.host_mr(), vecmem::data::buffer_type::resizable),
@@ -200,22 +200,22 @@ class worker {
               in.detector, m_be.device_mr(), m_be.copy())),
           m_field(m_be.make_field(in.field, in.accelerator_opts)),
           m_ca(m_be.mr(), m_be.copy(), m_be.queue(), in.clusterization_opts,
-               log.clone("ClusteringAlg")),
+               parent_log.clone("ClusteringAlg")),
           m_ms(m_be.mr(), m_be.copy(), m_be.queue(),
-               log.clone("MeasSortingAlg")),
+               parent_log.clone("MeasSortingAlg")),
           m_sf(m_be.mr(), m_be.copy(), m_be.queue(),
-               log.clone("SpFormationAlg")),
+               parent_log.clone("SpFormationAlg")),
           m_sa(in.seedfinder_config, in.grid_config, in.seedfilter_config,
-               m_be.mr(), m_be.copy(), m_be.queue(), log.clone("SeedingAlg")),
+               m_be.mr(), m_be.copy(), m_be.queue(), parent_log.clone("SeedingAlg")),
           m_gbts_sa(in.gbts_config, m_be.mr(), m_be.copy(), m_be.queue(),
-                    log.clone("GbtsSeedingAlg")),
+                    parent_log.clone("GbtsSeedingAlg")),
           m_tp(in.params_config, m_be.mr(), m_be.copy(), m_be.queue(),
-               log.clone("TrackParEstAlg")),
+               parent_log.clone("TrackParEstAlg")),
           m_finding(in.finding_config, m_be.mr(), m_be.copy(), m_be.queue(),
-                    log.clone("FindingAlg")),
+                    parent_log.clone("FindingAlg")),
           m_fitting(in.fitting_config, m_be.mr(), m_be.copy(), m_be.queue(),
-                    log.clone("FittingAlg")),
-          m_log(log.clone()) {
+                    parent_log.clone("FittingAlg")),
+          m_log(parent_log.clone()) {
         auto& copy = m_be.copy();
         copy.setup(m_det_descr)->wait();
         copy(vecmem::get_data(in.det_descr), m_det_descr)->wait();
@@ -619,7 +619,7 @@ int run(const traccc::opts::detector& detector_opts,
     TRACCC_INFO("==> Event loop: " << loop_ms << " ms for " << events.size()
                                    << " events with " << n_threads
                                    << " thread(s) -> "
-                                   << (loop_ms > 0. ? 1000. * events.size() / loop_ms
+                                   << (loop_ms > 0. ? 1000. * static_cast<double>(events.size()) / loop_ms
                                                     : 0.)
                                    << " events/s");
 
