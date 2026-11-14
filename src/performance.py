@@ -107,6 +107,82 @@ def load_series(folder):
     return pd.DataFrame([summarize(p) for p in files]).sort_values("n_spacepoints")
 
 
+def read_gpu_util(path):
+    '''
+    @brief reads a log of "nvidia-smi dmon -s u" (with or without -o T)
+    @param path : Path of the log
+    @return DataFrame with one row per second and the columns sm and mem
+            (% of time the multiprocessors / the memory were busy). The idle
+            seconds before the first and after the last busy one are removed:
+            they are the start-up and the end of the program, not the event loop
+    '''
+    names, rows = None, []
+    with open(path) as log:
+        for line in log:
+            fields = line.split()
+            if not fields:
+                continue
+            if line.startswith("#"):
+                # First header line: the column names (the second has the units)
+                if names is None and "sm" in fields[1:]:
+                    names = fields[1:] if fields[0] == "#" else [fields[0][1:]] + fields[1:]
+                continue
+            rows.append(fields)
+    if names is None or not rows:
+        return pd.DataFrame(columns=["sm", "mem"])
+    data = pd.DataFrame([r[:len(names)] for r in rows], columns=names)
+    data = data[["sm", "mem"]].apply(pd.to_numeric, errors="coerce").dropna()
+    busy = np.flatnonzero(data["sm"].to_numpy() > 0)
+    if busy.size == 0:
+        return data.iloc[0:0]
+    return data.iloc[busy[0]:busy[-1] + 1]
+
+
+def load_gpu_util(folder):
+    '''
+    @brief mean GPU utilization of every run of a folder of dmon logs
+    @param folder : (str or Path) folder with one log per run (run_500.log, ...)
+    @return DataFrame with the columns particles, gpu_sm, gpu_mem, gpu_samples
+    '''
+    rows = []
+    for path in Path(folder).glob("*.log"):
+        particles = run_number(path)
+        if particles is None:
+            continue
+        data = read_gpu_util(path)
+        rows.append({"particles": particles,
+                     "gpu_sm": data["sm"].mean() if len(data) else np.nan,
+                     "gpu_mem": data["mem"].mean() if len(data) else np.nan,
+                     "gpu_samples": len(data)})
+    if not rows:
+        raise SystemExit(f"No GPU utilization logs in {folder}")
+    return pd.DataFrame(rows)
+
+
+def plot_gpu_util(series):
+    '''
+    @brief mean utilization of the GPU during the event loop against the
+           event size, one line per series: multiprocessors (left) and memory
+           (right)
+    @param series : dict label -> summary DataFrame with the gpu_* columns
+    @return the matplotlib figure
+    '''
+    fig, (ax_sm, ax_mem) = plt.subplots(1, 2, figsize=(11, 4.5), sharex=True)
+    for label, s in series.items():
+        ax_sm.plot(s["n_spacepoints"], s["gpu_sm"], marker="o", label=label)
+        ax_mem.plot(s["n_spacepoints"], s["gpu_mem"], marker="o", label=label)
+    for ax, what in ((ax_sm, "multiprocessors (sm)"), (ax_mem, "memory (mem)")):
+        ax.set_xscale("log")
+        ax.set_ylim(0, 100)
+        ax.set_xlabel("Spacepoints per event (median)")
+        ax.set_ylabel(f"Mean GPU utilization, {what} [%]")
+        ax.grid(True, which="both", alpha=0.3)
+    ax_sm.legend()
+    fig.suptitle("GPU utilization during the event loop (nvidia-smi dmon, 1 sample/s)")
+    fig.tight_layout()
+    return fig
+
+
 def plot_reco_time(series):
     '''
     @brief median reconstruction time per event against the event size, one
@@ -188,6 +264,9 @@ if __name__ == "__main__":
     parser.add_argument("folders", nargs="+", help="folders with performance files")
     parser.add_argument("-l", "--labels", nargs="+",
                         help="legend label of every folder (default: folder names)")
+    parser.add_argument("-u", "--util", nargs="+",
+                        help="folders with the nvidia-smi dmon logs, one per folder of "
+                             "performance files and in the same order (optional)")
     parser.add_argument("-n", "--name", default=None,
                         help="name of the PDF (default: names of the folders)")
     parser.add_argument("-o", "--output", default="results",
@@ -201,12 +280,24 @@ if __name__ == "__main__":
 
     series = {label: load_series(folder) for label, folder in zip(labels, args.folders)}
 
+    # GPU utilization, matched to the runs by their number of particles
+    if args.util:
+        if len(args.util) != len(args.folders):
+            raise SystemExit("Give one folder of GPU logs per folder of performance files")
+        for label, folder in zip(labels, args.util):
+            series[label] = series[label].merge(load_gpu_util(folder),
+                                                on="particles", how="left")
+
     figs = [plot_reco_time(series)]
     figs += [plot_breakdown(label, s) for label, s in series.items()]
     with_throughput = {l: s for l, s in series.items()
                        if "events_per_s" in s and s["events_per_s"].notna().any()}
     if with_throughput:
         figs.append(plot_throughput(with_throughput))
+    with_util = {l: s for l, s in series.items()
+                 if "gpu_sm" in s and s["gpu_sm"].notna().any()}
+    if with_util:
+        figs.append(plot_gpu_util(with_util))
 
     name = args.name or "_vs_".join(labels)
     output = Path(args.output) / f"{name}.pdf"

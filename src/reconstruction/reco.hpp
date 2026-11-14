@@ -693,4 +693,4 @@ int main(int argc, char* argv[]) {
                         seeding_gbts_opts.useGBTS, n_threads);
 }
 
-}  // namespace reco
+}  
