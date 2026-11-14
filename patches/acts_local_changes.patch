@@ -1,3 +1,42 @@
+diff --git a/Traccc/examples/run/alpaka/CMakeLists.txt b/Traccc/examples/run/alpaka/CMakeLists.txt
+index 6b653ab02..29071cc43 100644
+--- a/Traccc/examples/run/alpaka/CMakeLists.txt
++++ b/Traccc/examples/run/alpaka/CMakeLists.txt
+@@ -36,6 +36,14 @@ set(DETRAY detray::io detray::detectors)
+ traccc_add_executable( seq_example_alpaka "apps/seq_example_alpaka.cpp"
+     LINK_LIBRARIES ${LIBRARIES} ${DETRAY}
+ )
++
++traccc_add_executable( reco_cpu "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../src/reconstruction/reco_cpu.cpp"
++    LINK_LIBRARIES ${LIBRARIES} ${DETRAY}
++)
++
++target_compile_definitions( traccc_reco_cpu PRIVATE
++   RECO_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../../../../data" )
++
+ traccc_add_executable( seeding_example_alpaka "apps/seeding_example_alpaka.cpp"
+     LINK_LIBRARIES ${LIBRARIES}
+ )
+diff --git a/Traccc/examples/run/cuda/CMakeLists.txt b/Traccc/examples/run/cuda/CMakeLists.txt
+index d38092e09..b2cf31be8 100644
+--- a/Traccc/examples/run/cuda/CMakeLists.txt
++++ b/Traccc/examples/run/cuda/CMakeLists.txt
+@@ -56,6 +56,15 @@ traccc_add_executable( seq_example_cuda "apps/seq_example_cuda.cpp"
+                   traccc::options detray::detectors detray::io
+                   traccc::examples_common
+ )
++
++traccc_add_executable( reco_gpu  "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../src/reconstruction/reco_gpu.cpp"
++   LINK_LIBRARIES vecmem::core vecmem::cuda traccc::io traccc::performance
++                  traccc::core traccc::device_common traccc::cuda_utils traccc::cuda
++                  traccc::options traccc::examples_common detray::io detray::detectors )
++               
++target_compile_definitions( traccc_reco_gpu PRIVATE
++   RECO_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../../../../data" )
++
+ traccc_add_executable( seeding_example_cuda "apps/seeding_example_cuda.cpp"
+    LINK_LIBRARIES vecmem::core vecmem::cuda traccc::io traccc::performance
+                   traccc::core traccc::device_common traccc::cuda_utils traccc::cuda
 diff --git a/Traccc/examples/simulation/CMakeLists.txt b/Traccc/examples/simulation/CMakeLists.txt
 index b642bd070..95758c1f5 100644
 --- a/Traccc/examples/simulation/CMakeLists.txt
