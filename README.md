@@ -14,12 +14,14 @@ The project hosted and developed in this repository is a test of the performance
 
 ### Workflow
 
-- Simulation + Digitization : set details in simulation.conf
+- Simulation + Digitization : 
 
+  - Set details :  simulation.conf
   - Compilation : cmake --build traccc-build -j8 --target traccc_toy_mc 2>&1 
   - Execution : ./exec/run_simulation.sh
 
 - Reconstruction (substitute gpu with cpu for cpu execution):
-
+  
+  - Set details : reco.conf
   - Compilation : cmake --build traccc-build -j8 --target traccc_reco_gpu 2>&1
   - Execution :  ./exec/run_reco.sh gpu data/run_* --input_event (NUMEROEVENTI)

@@ -16,4 +16,8 @@ __pycache__/
 *.json
 *.log
 *.pdf
+Exam_2/
+*.so
+*.so.*
+wget-log*
 !config/*.json
