@@ -1,5 +1,7 @@
 # CMEPDA Traccc performance project
 
+[![CI](https://github.com/LuxNasone/CMEPDA-Traccc-project/actions/workflows/ci.yml/badge.svg)](https://github.com/LuxNasone/CMEPDA-Traccc-project/actions/workflows/ci.yml)
+
 ## Brief description
 
 This project measures the performance of the [traccc](https://github.com/acts-project/traccc)
