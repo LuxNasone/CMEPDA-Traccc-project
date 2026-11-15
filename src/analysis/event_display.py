@@ -26,6 +26,30 @@ import pandas as pd
 from matplotlib import colors, pyplot as plt, ticker
 from matplotlib.backends.backend_pdf import PdfPages
 
+try:
+    from tqdm import tqdm
+except ImportError:  # tqdm not installed: a minimal text progress bar
+    import sys
+
+    def tqdm(iterable, desc="", total=None, **_):
+        '''
+        @brief minimal replacement of tqdm: prints "desc [#####.....] i/n" on stderr
+        @param iterable : items to loop over
+        @param desc : (str) text before the bar
+        @param total : (int) number of items, default len(iterable)
+        @return the items of iterable, one at a time
+        '''
+        items = list(iterable)
+        total = total or len(items)
+        width = 30
+        for i, item in enumerate(items, start=1):
+            yield item
+            done = int(width * i / total) if total else width
+            sys.stderr.write(f"\r{desc} [{'#' * done}{'.' * (width - done)}] {i}/{total}")
+            sys.stderr.flush()
+        if total:
+            sys.stderr.write("\n")
+
 ## measurement_id of the cells that come from noise (2^64 - 1)
 NOISE_ID = 18446744073709551615
 
@@ -63,7 +87,7 @@ def read_many(folder, events, kind, columns=None):
     @return DataFrame with an extra "event" column
     '''
     tables = []
-    for event in events:
+    for event in tqdm(events, desc=f"Reading {kind:17s}", leave=True):
         path = event_file(folder, event, kind)
         if path.exists():
             table = pd.read_csv(path, usecols=columns)

@@ -7,6 +7,30 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
+try:
+    from tqdm import tqdm
+except ImportError:  # tqdm not installed: a minimal text progress bar
+    import sys
+
+    def tqdm(iterable, desc="", total=None, **_):
+        '''
+        @brief minimal replacement of tqdm: prints "desc [#####.....] i/n" on stderr
+        @param iterable : items to loop over
+        @param desc : (str) text before the bar
+        @param total : (int) number of items, default len(iterable)
+        @return the items of iterable, one at a time
+        '''
+        items = list(iterable)
+        total = total or len(items)
+        width = 30
+        for i, item in enumerate(items, start=1):
+            yield item
+            done = int(width * i / total) if total else width
+            sys.stderr.write(f"\r{desc} [{'#' * done}{'.' * (width - done)}] {i}/{total}")
+            sys.stderr.flush()
+        if total:
+            sys.stderr.write("\n")
+
 ## Reconstruction steps, in chain order, with their labels. File reading is
 ## kept apart: it is the same for every algorithm and depends on the disk.
 STEPS = {
@@ -104,7 +128,8 @@ def load_series(folder):
     files = [p for p in Path(folder).glob("*.csv") if run_number(p) is not None]
     if not files:
         raise SystemExit(f"No performance .csv files in {folder}")
-    return pd.DataFrame([summarize(p) for p in files]).sort_values("n_spacepoints")
+    rows = [summarize(p) for p in tqdm(files, desc=f"Reading {Path(folder).name:12s}")]
+    return pd.DataFrame(rows).sort_values("n_spacepoints")
 
 
 def read_gpu_util(path):
@@ -130,7 +155,12 @@ def read_gpu_util(path):
             rows.append(fields)
     if names is None or not rows:
         return pd.DataFrame(columns=["sm", "mem"])
-    data = pd.DataFrame([r[:len(names)] for r in rows], columns=names)
+    # Rows shorter than the header are dropped: the last line can be cut when
+    # nvidia-smi dmon is stopped while writing it
+    rows = [r[:len(names)] for r in rows if len(r) >= len(names)]
+    if not rows:
+        return pd.DataFrame(columns=["sm", "mem"])
+    data = pd.DataFrame(rows, columns=names)
     data = data[["sm", "mem"]].apply(pd.to_numeric, errors="coerce").dropna()
     busy = np.flatnonzero(data["sm"].to_numpy() > 0)
     if busy.size == 0:
@@ -145,7 +175,8 @@ def load_gpu_util(folder):
     @return DataFrame with the columns particles, gpu_sm, gpu_mem, gpu_samples
     '''
     rows = []
-    for path in Path(folder).glob("*.log"):
+    for path in tqdm(sorted(Path(folder).glob("*.log")),
+                     desc=f"GPU logs {Path(folder).name:11s}"):
         particles = run_number(path)
         if particles is None:
             continue
@@ -181,6 +212,76 @@ def plot_gpu_util(series):
     fig.suptitle("GPU utilization during the event loop (nvidia-smi dmon, 1 sample/s)")
     fig.tight_layout()
     return fig
+
+
+def natural_key(path):
+    '''
+    @brief sorting key that compares the numbers in a name as numbers
+           (threads_2 before threads_16)
+    @param path : Path to sort
+    @return list of strings and integers
+    '''
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", path.name)]
+
+
+def has_runs(folder):
+    '''
+    @brief tells whether a folder contains performance files of runs
+    @param folder : Path of the folder
+    @return (bool) True if it holds at least one <backend>_run_<N>.csv
+    '''
+    return any(run_number(p) is not None for p in folder.glob("*.csv"))
+
+
+def expand_folders(folders):
+    '''
+    @brief turns the folders given on the command line into the list of
+           series: a folder with performance files is one series, and each
+           of its subfolders with performance files (threads_2, threads_4,
+           ...) is one more, in natural order
+    @param folders : list of folder names
+    @return list of Paths, without repetitions
+    '''
+    found = []
+    for folder in map(Path, folders):
+        if has_runs(folder):
+            found.append(folder)
+        subfolders = sorted((d for d in folder.iterdir() if d.is_dir() and has_runs(d)),
+                            key=natural_key) if folder.is_dir() else []
+        found += subfolders
+    unique = list(dict.fromkeys(p.resolve() for p in found))
+    if not unique:
+        raise SystemExit(f"No performance .csv files in {' '.join(folders)}")
+    return unique
+
+
+def series_label(folder):
+    '''
+    @brief legend label of a series: "N threads" for a threads_N folder,
+           otherwise the folder name
+    @param folder : Path of the series
+    @return (str) the label
+    '''
+    match = re.fullmatch(r"threads_(\d+)", folder.name)
+    if match:
+        n = int(match.group(1))
+        return f"{n} thread" + ("s" if n > 1 else "")
+    return folder.name
+
+
+def util_folder(folder):
+    '''
+    @brief folder of the nvidia-smi dmon logs that goes with a series: for
+           results/reco/threads_N it is results/reco/gpu_util_tN
+    @param folder : Path of the series
+    @return Path of the logs, or None if there is none
+    '''
+    match = re.fullmatch(r"threads_(\d+)", folder.name)
+    if match:
+        candidate = folder.parent / f"gpu_util_t{match.group(1)}"
+        if candidate.is_dir():
+            return candidate
+    return None
 
 
 def plot_reco_time(series):
@@ -261,30 +362,43 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Plots the performance files of the runs. Every folder is "
                     "one series (e.g. cpu, gpu, gpu with 4 threads).")
-    parser.add_argument("folders", nargs="+", help="folders with performance files")
+    parser.add_argument("folders", nargs="+",
+                        help="folders with performance files; the subfolders with "
+                             "performance files (e.g. threads_N) are added too, so "
+                             "results/reco alone gives every thread count")
     parser.add_argument("-l", "--labels", nargs="+",
-                        help="legend label of every folder (default: folder names)")
+                        help="legend label of every series (default: 'N threads' "
+                             "for threads_N folders, otherwise the folder name)")
     parser.add_argument("-u", "--util", nargs="+",
-                        help="folders with the nvidia-smi dmon logs, one per folder of "
-                             "performance files and in the same order (optional)")
+                        help="folders with the nvidia-smi dmon logs, one per series and "
+                             "in the same order (default: gpu_util_tN next to threads_N)")
     parser.add_argument("-n", "--name", default=None,
-                        help="name of the PDF (default: names of the folders)")
+                        help="name of the PDF (default: names of the series)")
     parser.add_argument("-o", "--output", default="results",
                         help="output folder of the PDF (default: results)")
     parser.add_argument("--show", action="store_true", help="also open the plots on screen")
     args = parser.parse_args()
 
-    labels = args.labels or [Path(f).resolve().name for f in args.folders]
-    if len(labels) != len(args.folders):
-        raise SystemExit("Give one label per folder")
+    folders = expand_folders(args.folders)
+    labels = args.labels or [series_label(f) for f in folders]
+    if len(labels) != len(folders):
+        raise SystemExit(f"Give one label per series: found {len(folders)} series ("
+                         + ", ".join(str(f) for f in folders) + ")")
+    print("Series:")
+    for label, folder in zip(labels, folders):
+        print(f"  {label:12s} {folder}")
 
-    series = {label: load_series(folder) for label, folder in zip(labels, args.folders)}
+    series = {label: load_series(folder) for label, folder in zip(labels, folders)}
 
     # GPU utilization, matched to the runs by their number of particles
     if args.util:
-        if len(args.util) != len(args.folders):
-            raise SystemExit("Give one folder of GPU logs per folder of performance files")
-        for label, folder in zip(labels, args.util):
+        if len(args.util) != len(folders):
+            raise SystemExit("Give one folder of GPU logs per series")
+        logs = [Path(u) for u in args.util]
+    else:
+        logs = [util_folder(f) for f in folders]
+    for label, folder in zip(labels, logs):
+        if folder is not None:
             series[label] = series[label].merge(load_gpu_util(folder),
                                                 on="particles", how="left")
 
@@ -299,7 +413,14 @@ if __name__ == "__main__":
     if with_util:
         figs.append(plot_gpu_util(with_util))
 
-    name = args.name or "_vs_".join(labels)
+    # Default name: the folder given (results/reco -> reco.pdf), or the
+    # labels of the series when several folders are given
+    if args.name:
+        name = args.name
+    elif len(args.folders) == 1:
+        name = Path(args.folders[0]).resolve().name
+    else:
+        name = "_vs_".join(l.replace(" ", "") for l in labels)
     output = Path(args.output) / f"{name}.pdf"
     save_plots(figs, output)
 
