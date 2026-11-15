@@ -1,11 +1,6 @@
-// This file is part of the ACTS project.
-//
-// Copyright (C) 2016 CERN for the benefit of the ACTS project
-//
-// This Source Code Form is subject to the terms of the Mozilla Public
-// License, v. 2.0. If a copy of the MPL was not distributed with this
-// file, You can obtain one at https://mozilla.org/MPL/2.0/.
-
+/**
+ * @file Toy simulation program : simulates a cylindrical collider-like geometry (barrel-endcap) according to parameters set in simulation.conf
+ */
 #include <cstdint>
 #include <exception>
 #include <fstream>
@@ -15,7 +10,6 @@
 #include <string>
 #include <vector>
 
-// Project include(s).
 #include "traccc/bfield/construct_const_bfield.hpp"
 #include "traccc/bfield/magnetic_field_types.hpp"
 #include "traccc/definitions/primitives.hpp"
@@ -32,18 +26,26 @@
 #include "traccc/simulation/simulator.hpp"
 #include "traccc/simulation/smearing_writer.hpp"
 
-// detray include(s).
 #include <detray/test/common/build_toy_detector.hpp>
 
-// VecMem include(s).
 #include <vecmem/memory/host_memory_resource.hpp>
 
-// Boost include(s).
 #include <boost/filesystem.hpp>
 
 using namespace traccc;
 
+/**
+ * @brief Structure that contains detector simulated features, they can be modified in simulation.conf
+ * @param barrel : (unsigned int) number of detector barrel layers
+ * @param endcap : (unsiegned int) number of detector endcap layers
+ * @param bfield_tesla : (double) strength of the z-component of the magnetic field, in Tesla
+ * @param smearing_um : (double) resolution of the measurement, to be put to zero in simulation.conf (in um)
+ * @param seed : (std::uint64_t) seed of the RNG 
+ * @param traccc_args : (std::vector<std::string>) keys passed directly to traccc (ex. : gen-nparticles)
+ */
+
 struct toy_config {
+
   unsigned int barrel = 4u;
   unsigned int endcap = 7u;
   double bfield_tesla = 2.;
@@ -52,7 +54,14 @@ struct toy_config {
   std::vector<std::string> traccc_args;
 };
 
+/**
+ * @brief Cuts all spaces in a string
+ * @param text : (const std::string) input string
+ * @return The substring without any spacing left
+ */
+
 std::string trim(const std::string& text) {
+
   const auto first = text.find_first_not_of(" \t\r");
   if (first == std::string::npos) {
     return "";
@@ -61,7 +70,15 @@ std::string trim(const std::string& text) {
   return text.substr(first, last - first + 1u);
 }
 
+/**
+ * @brief Reads the path of the configuration files, where the simulation parameters are set
+ * @param path : (const std::string) configuration file (.conf) path
+ * @throws Runtime_Error if the path is not found or a non valid row (without "=") or type for the value is found
+ * @return a toy_config structure whose attribute are the ones written in the configuration file linked in path
+ */
+
 toy_config read_config(const std::string& path) {
+
   std::ifstream file(path);
   if (!file) {
     throw std::runtime_error("Impossibile aprire " + path);
@@ -103,45 +120,39 @@ toy_config read_config(const std::string& path) {
   return cfg;
 }
 
+/**
+  * @brief Builds the detector simulation, simulating a collider-like cylindrical geometry
+  * @param cfg : (const toy_config) configuration object containing the configuration parameters
+  * @param generation_opts : (const traccc::opts::generation) traccc object that stores the generator properties
+  * @param output_opts : (const traccc::opts::output_data) traccc object that stores output directory path
+  * @param propagation_opts : (const traccc::opts::track_propagation) traccc object that stores propagation properties
+  * @return 0 if no error is found
+  */
+
 int simulate(const toy_config& cfg,
              const traccc::opts::generation& generation_opts,
              const traccc::opts::output_data& output_opts,
              const traccc::opts::track_propagation& propagation_opts) {
-  // Use deterministic random number generator for testing
+
   using uniform_gen_t =
       detray::detail::random_numbers<scalar,
                                      std::uniform_real_distribution<scalar>>;
 
-  // Memory resource
   vecmem::host_memory_resource host_mr;
 
-  /*****************************
-   * Build a toy geometry
-   *****************************/
-
-  // Detector type
   using detector_type = detray::detector_host_t<traccc::toy_detector>;
 
-  // B field value and its type
-  // @TODO: Set B field as argument
   using b_field_t = covfie::field<traccc::const_bfield_backend_t<scalar>>;
   const vector3 B{0.f, 0.f, static_cast<scalar>(cfg.bfield_tesla) * traccc::unit<scalar>::T};
   b_field_t field = traccc::construct_const_bfield(B)
                         .as_field<traccc::const_bfield_backend_t<scalar>>();
 
-  // Create the toy geometry
   detray::toy_det_config<scalar> toy_cfg{};
   toy_cfg.n_brl_layers(cfg.barrel).n_edc_layers(cfg.endcap);
-  // @TODO: Increase the material budget again
   toy_cfg.module_mat_thickness(0.11f * traccc::unit<scalar>::mm);
   const auto [det, name_map] =
       detray::build_toy_detector<traccc::default_algebra>(host_mr, toy_cfg);
 
-  /***************************
-   * Generate simulation data
-   ***************************/
-
-  // Origin of particles
   using generator_type =
       detray::random_track_generator<traccc::free_track_parameters<>,
                                      uniform_gen_t>;
@@ -163,18 +174,14 @@ int simulate(const toy_config& cfg,
 
   generator_type generator(gen_cfg);
 
-  // Smearing value for measurements
   const scalar smearing = static_cast<scalar>(cfg.smearing_um) * traccc::unit<scalar>::um;
   traccc::measurement_smearer<traccc::default_algebra> meas_smearer(smearing, smearing);
 
-  // Type declarations
   using writer_type = traccc::smearing_writer<
       traccc::measurement_smearer<traccc::default_algebra>>;
 
-  // Writer config
   typename writer_type::config smearer_writer_cfg{meas_smearer};
 
-  // Run simulator
   const std::string full_path = io::data_directory() + output_opts.directory;
 
   boost::filesystem::create_directories(full_path);
@@ -189,7 +196,6 @@ int simulate(const toy_config& cfg,
 
   sim.run();
 
-  // Create detector file
   auto writer_cfg = detray::io::detector_writer_config{}
                         .format(detray::io::format::json)
                         .replace_files(true);
@@ -198,9 +204,16 @@ int simulate(const toy_config& cfg,
   return 0;
 }
 
-// The main routine
-//
+/**
+ * @brief Main routine of the toy MC simulation.
+ * @param argc Number of command line arguments: must be 2.
+ * @param argv Command line arguments: the program name and the configuration file.
+ * @return 0 on success; 1 on a wrong command line, an invalid configuration
+ *         or an error during the simulation.
+ */
+
 int main(int argc, char* argv[]) {
+
   if (argc != 2) {
     std::cerr << "Uso: " << argv[0] << " <file di configurazione>\n";
     return 1;
