@@ -1,0 +1,86 @@
+# Continuous integration: runs at every push and pull request.
+#   tests  - the Python tests (digitization and analysis), with pytest
+#   lint   - Python: real errors make it fail, style issues are only reported
+#   shell  - syntax and shellcheck errors of the scripts in exec/
+#   docs   - Doxygen documentation, published on GitHub Pages from main
+# The C++ programs are not built here: they need ACTS, traccc and a CUDA GPU
+# (see exec/build.sh).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Folder of the HTML written by Doxygen (OUTPUT_DIRECTORY in Doxyfile + html)
+  DOXYGEN_HTML: docs/doxygen/html
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the dependencies
+        run: pip install -r requirements.txt pytest
+      - name: Run the tests
+        env:
+          MPLBACKEND: Agg   # no display on the runner
+        run: pytest -v
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install flake8
+      - name: Errors (syntax errors, undefined names)
+        run: flake8 src tests --select=E9,F63,F7,F82 --show-source --statistics
+      - name: Style (reported, does not fail)
+        run: flake8 src tests --max-line-length=100 --exit-zero --statistics
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax of the scripts
+        run: for f in exec/*.sh; do bash -n "$f" && echo "ok  $f"; done
+      - name: Shellcheck (errors only)
+        run: shellcheck --severity=error exec/*.sh
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
+      - name: Build the documentation
+        run: |
+          doxygen Doxyfile
+          test -f "$DOXYGEN_HTML/index.html" || {
+            echo "No $DOXYGEN_HTML/index.html: check OUTPUT_DIRECTORY in Doxyfile"; exit 1; }
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ env.DOXYGEN_HTML }}
+
+  # Publishes the documentation: only for pushes to main, after the tests pass.
+  # Needs Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
+  deploy-docs:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [tests, docs]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
