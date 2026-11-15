@@ -13,10 +13,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-env:
-  # Folder of the HTML written by Doxygen (OUTPUT_DIRECTORY in Doxyfile + html)
-  DOXYGEN_HTML: docs/doxygen/html
-
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -61,13 +57,22 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
       - name: Build the documentation
+        id: doxygen
         run: |
+          # Output folder from the Doxyfile: OUTPUT_DIRECTORY/HTML_OUTPUT.
+          # Doxygen does not create missing parent folders, so they are made here.
+          value() { grep -E "^[[:space:]]*$1[[:space:]]*=" Doxyfile | tail -n 1 | cut -d= -f2- | xargs; }
+          out=$(value OUTPUT_DIRECTORY)
+          html=$(value HTML_OUTPUT)
+          out=${out:-.}
+          html_dir="$out/${html:-html}"
+          mkdir -p "$out"
           doxygen Doxyfile
-          test -f "$DOXYGEN_HTML/index.html" || {
-            echo "No $DOXYGEN_HTML/index.html: check OUTPUT_DIRECTORY in Doxyfile"; exit 1; }
+          test -f "$html_dir/index.html" || { echo "No $html_dir/index.html"; exit 1; }
+          echo "html=$html_dir" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: ${{ env.DOXYGEN_HTML }}
+          path: ${{ steps.doxygen.outputs.html }}
 
   # Publishes the documentation: only for pushes to main, after the tests pass.
   # Needs Settings -> Pages -> Build and deployment -> Source: GitHub Actions.
