@@ -50,6 +50,8 @@ CONFIG_KEYS = {
     "threshold-e": (float, 1000.0),
     "noisy-pixel-fraction": (float, 1e-6),
     "seed": (int, 0),
+    # Processes digitizing events in parallel; 0 = one per core
+    "workers": (int, 0),
 }
 
 
@@ -207,12 +209,11 @@ def main():
                         help="folder of the cells (default: the event folder)")
     parser.add_argument("--log-file", type=Path, default=Path("logs/toy_digitize.log"),
                         help="log file")
-    parser.add_argument("--workers", type=int, default=os.cpu_count() or 1,
-                        help="number of processes digitizing events in parallel "
-                             "(default: number of cores; 1 = no parallelism)")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="number of processes digitizing events in parallel; "
+                             "replaces the workers key of the configuration file "
+                             "(0 = one per core, 1 = no parallelism)")
     args = parser.parse_args()
-    if args.workers < 1:
-        parser.error("--workers must be at least 1")
 
     args.log_file.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(filename=args.log_file, filemode="w", level=logging.INFO,
@@ -225,9 +226,15 @@ def main():
     except (OSError, ValueError) as error:
         parser.error(str(error))
 
+    # Command line first, then the configuration file; 0 = one per core
+    workers = args.workers if args.workers is not None else config["workers"]
+    if workers < 0:
+        parser.error("the number of workers cannot be negative")
+    workers = workers or os.cpu_count() or 1
+
     output = args.output or args.folder
     try:
-        n_events = digitize_folder(args.folder, output, config, args.workers)
+        n_events = digitize_folder(args.folder, output, config, workers)
     except FileNotFoundError as error:
         parser.error(str(error))
 
