@@ -176,7 +176,6 @@ src/
   digitization/      digitizer: simulated hits -> pixel cells (Python)
   reconstruction/    reconstruction chain on CPU and GPU (C++)
   analysis/          performance plots (Python)
-  python_interface/  reading of the traccc files in Python
 tests/               tests of the Python code
 ```
 
