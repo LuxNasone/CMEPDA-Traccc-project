@@ -11,7 +11,7 @@ from event_io import CELL_COLUMNS
 from toy_digitize import (DIGITIZATION_FILE, build_digitizer, digitize_folder,
                           event_rng, find_measurement_files, read_config)
 
-SCRIPT = Path(__file__).resolve().parents[1] / "src" / "digitization" / "toy_digitize.py"
+SCRIPT = Path(__file__).resolve().parents[2] / "src" / "digitization" / "toy_digitize.py"
 HEADER = ("measurement_id,geometry_id,local_key,local0,local1,phi,theta,"
           "time,var_local0,var_local1,var_phi,var_theta,var_time\n")
 BIG_ID = 2**63 + 5
@@ -70,7 +70,7 @@ def digitization_section(path):
 
 
 def test_project_config_is_valid(tmp_path):
-    path = Path(__file__).resolve().parents[1] / "config" / "simulation.conf"
+    path = Path(__file__).resolve().parents[2] / "config" / "simulation.conf"
     text = digitization_section(path)
     assert "pitch-um" in text  # the [digitization] section was found
     build_digitizer(read_config(write_config(tmp_path / "c.conf", text)))
