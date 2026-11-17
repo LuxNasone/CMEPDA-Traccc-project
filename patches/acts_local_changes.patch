@@ -18,7 +18,7 @@ index 6b653ab02..29071cc43 100644
      LINK_LIBRARIES ${LIBRARIES}
  )
 diff --git a/Traccc/examples/run/cuda/CMakeLists.txt b/Traccc/examples/run/cuda/CMakeLists.txt
-index d38092e09..b2cf31be8 100644
+index d38092e09..ca0b80dbb 100644
 --- a/Traccc/examples/run/cuda/CMakeLists.txt
 +++ b/Traccc/examples/run/cuda/CMakeLists.txt
 @@ -56,6 +56,15 @@ traccc_add_executable( seq_example_cuda "apps/seq_example_cuda.cpp"
@@ -37,6 +37,15 @@ index d38092e09..b2cf31be8 100644
  traccc_add_executable( seeding_example_cuda "apps/seeding_example_cuda.cpp"
     LINK_LIBRARIES vecmem::core vecmem::cuda traccc::io traccc::performance
                    traccc::core traccc::device_common traccc::cuda_utils traccc::cuda
+@@ -71,3 +80,8 @@ traccc_add_executable( truth_fitting_example_cuda "apps/truth_fitting_example_cu
+                   traccc::core traccc::device_common traccc::cuda_utils traccc::cuda
+                   traccc::options traccc::examples_common
+ )
++
++traccc_add_executable( hough_reco
++   "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../src/reconstruction/hough_reco.cpp" )
++target_compile_definitions( traccc_hough_reco PRIVATE
++   RECO_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../../../../data" )
 diff --git a/Traccc/examples/simulation/CMakeLists.txt b/Traccc/examples/simulation/CMakeLists.txt
 index b642bd070..4b0b7af3a 100644
 --- a/Traccc/examples/simulation/CMakeLists.txt

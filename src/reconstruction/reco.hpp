@@ -15,7 +15,7 @@
 #pragma once
 
 // Project include(s).
-#include "spacepoint_csv_writer.hpp"
+#include "spacepoint_writer.hpp"
 #include "track_csv_writer.hpp"
 // reco.hpp is included before the backend headers, so every traccc type used
 // by the template must be declared here (non-dependent names are looked up
