@@ -105,7 +105,7 @@ else
 fi
 
 # --- 4. Compilation --------------------------------------------------------
-targets=(traccc_toy_mc traccc_reco_cpu traccc_throughput_mt_alpaka)
+targets=(traccc_toy_mc traccc_reco_cpu traccc_throughput_mt_alpaka traccc_hough_reco)
 if [ "$with_cuda" = 1 ]; then
     targets+=(traccc_reco_gpu traccc_throughput_mt_cuda)
 fi

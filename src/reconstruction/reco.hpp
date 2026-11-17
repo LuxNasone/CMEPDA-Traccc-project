@@ -8,10 +8,14 @@
  * complete copy of the backend (its own queue/stream, memory, device detector
  * and algorithms) and takes the next free event from a shared counter. With
  * N=1 the behaviour is the same as the original sequential example.
+ *
+ * With --write-spacepoints the spacepoints of every event are also written to
+ * event<N>-spacepoints.csv, as input of the Hough transform (hough_reco).
  */
 #pragma once
 
 // Project include(s).
+#include "spacepoint_csv_writer.hpp"
 #include "track_csv_writer.hpp"
 // reco.hpp is included before the backend headers, so every traccc type used
 // by the template must be declared here (non-dependent names are looked up
@@ -144,6 +148,7 @@ struct shared_inputs {
     const traccc::opts::clusterization& clusterization_opts;
     const traccc::opts::accelerator& accelerator_opts;
     bool use_gbts;
+    bool write_spacepoints;  ///< Also write the spacepoints of every event
 
     traccc::detector_design_description::host& det_descr;
     traccc::detector_conditions_description::host& det_cond;
@@ -340,6 +345,10 @@ class worker {
             Backend::output_dir, event,
             traccc::edm::track_container<traccc::default_algebra>::const_data{
                 track_states});
+        if (m_in.write_spacepoints) {
+            reco::write_spacepoints_csv(Backend::output_dir, event,
+                                        spacepoints_per_event, measurements_per_event);
+        }
 
         res.n_measurements = measurements_per_event.size();
         res.n_spacepoints = spacepoints_per_event.size();
@@ -389,6 +398,7 @@ class worker {
  * @tparam Backend Struct providing the algorithm types, the queue/stream,
  *         the memory resources and the magnetic field for one platform.
  * @param n_threads Number of events processed at the same time.
+ * @param write_spacepoints Also write the spacepoints of every event.
  */
 template <typename Backend>
 int run(const traccc::opts::detector& detector_opts,
@@ -403,7 +413,7 @@ int run(const traccc::opts::detector& detector_opts,
         const traccc::opts::performance& performance_opts,
         const traccc::opts::accelerator& accelerator_opts,
         std::unique_ptr<const traccc::Logger> ilogger, bool usingGBTS,
-        unsigned int n_threads) {
+        unsigned int n_threads, bool write_spacepoints) {
     TRACCC_LOCAL_LOGGER(std::move(ilogger));
 
     // Host memory for everything read once and shared by the threads.
@@ -453,6 +463,7 @@ int run(const traccc::opts::detector& detector_opts,
                      clusterization_opts,
                      accelerator_opts,
                      usingGBTS,
+                     write_spacepoints,
                      host_det_descr,
                      host_det_cond,
                      host_det,
@@ -626,12 +637,19 @@ int run(const traccc::opts::detector& detector_opts,
     return 0;
 }
 
+/// Options of this program that the traccc option parser does not know.
+struct extra_options {
+    unsigned int n_threads = 1;      ///< --threads=N: events in parallel
+    bool write_spacepoints = false;  ///< --write-spacepoints
+};
+
 /**
- * @brief Removes --threads=N (or --threads N) from the command line, because
- *        the traccc option parser would refuse it, and returns N (default 1).
+ * @brief Removes the options of this program (--threads=N or --threads N,
+ *        --write-spacepoints) from the command line, because the traccc
+ *        option parser would refuse them, and returns their values.
  */
-inline unsigned int extract_threads(int& argc, char* argv[]) {
-    unsigned int n_threads = 1;
+inline extra_options extract_extra_options(int& argc, char* argv[]) {
+    extra_options extra;
     const auto parse = [](std::string_view value) {
         const unsigned long n = std::stoul(std::string(value));
         if (n == 0) {
@@ -643,16 +661,18 @@ inline unsigned int extract_threads(int& argc, char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg(argv[i]);
         if (arg.rfind("--threads=", 0) == 0) {
-            n_threads = parse(arg.substr(std::string_view("--threads=").size()));
+            extra.n_threads = parse(arg.substr(std::string_view("--threads=").size()));
         } else if (arg == "--threads" && i + 1 < argc) {
-            n_threads = parse(argv[++i]);
+            extra.n_threads = parse(argv[++i]);
+        } else if (arg == "--write-spacepoints") {
+            extra.write_spacepoints = true;
         } else {
             argv[out++] = argv[i];
         }
     }
     argc = out;
     argv[argc] = nullptr;
-    return n_threads;
+    return extra;
 }
 
 /**
@@ -663,7 +683,7 @@ int main(int argc, char* argv[]) {
     std::unique_ptr<const traccc::Logger> logger = traccc::getDefaultLogger(
         std::string("TracccReco_") + Backend::name, traccc::Logging::Level::INFO);
 
-    const unsigned int n_threads = extract_threads(argc, argv);
+    const extra_options extra = extract_extra_options(argc, argv);
 
     traccc::opts::detector detector_opts;
     traccc::opts::magnetic_field bfield_opts;
@@ -678,7 +698,8 @@ int main(int argc, char* argv[]) {
     traccc::opts::accelerator accelerator_opts;
     traccc::opts::program_options program_opts{
         std::string("Full Tracking Chain (") + Backend::name +
-            ") [extra option: --threads=N, events processed in parallel]",
+            ") [extra options: --threads=N (events in parallel), "
+            "--write-spacepoints (spacepoints to CSV)]",
         {detector_opts, bfield_opts, input_opts, clusterization_opts,
          seeding_opts, seeding_gbts_opts, finding_opts, propagation_opts,
          performance_opts, fitting_opts, accelerator_opts},
@@ -690,7 +711,8 @@ int main(int argc, char* argv[]) {
                         clusterization_opts, seeding_opts, seeding_gbts_opts,
                         finding_opts, propagation_opts, fitting_opts,
                         performance_opts, accelerator_opts, logger->clone(),
-                        seeding_gbts_opts.useGBTS, n_threads);
+                        seeding_gbts_opts.useGBTS, extra.n_threads,
+                        extra.write_spacepoints);
 }
 
-}  
+}  // namespace reco

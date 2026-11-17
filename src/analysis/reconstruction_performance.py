@@ -384,9 +384,11 @@ def plot_fit_quality(runs):
     '''
     fig, (ax_p, ax_n) = plt.subplots(1, 2, figsize=(12, 4.5))
     for label, t in runs:
-        good = t[t["ndf"] > 0]
-        ax_p.hist(good["pval"], bins=np.linspace(0, 1, 21), histtype="step",
-                  density=True, label=label)
+        good = t[(t["ndf"] > 0) & t["pval"].notna()]
+        # Tracks without a p-value (e.g. the Hough fit, ndf = 0) are not drawn
+        if len(good):
+            ax_p.hist(good["pval"], bins=np.linspace(0, 1, 21), histtype="step",
+                      density=True, label=label)
         n = t["n_meas"].dropna().astype(int)
         if len(n):
             ax_n.hist(n, bins=np.arange(n.min(), n.max() + 2) - 0.5, histtype="step",

@@ -42,6 +42,7 @@ STEPS = {
     "t_finding_ms": "Track finding",
     "t_fitting_ms": "Track fitting",
     "t_d2h_ms": "D2H copy",
+    "t_hough_ms": "Hough transform",   # hough_reco: replaces seeding to fitting
 }
 
 

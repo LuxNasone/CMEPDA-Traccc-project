@@ -1,0 +1,101 @@
+diff --git a/Traccc/examples/run/alpaka/CMakeLists.txt b/Traccc/examples/run/alpaka/CMakeLists.txt
+index 6b653ab02..24290d96d 100644
+--- a/Traccc/examples/run/alpaka/CMakeLists.txt
++++ b/Traccc/examples/run/alpaka/CMakeLists.txt
+@@ -36,6 +36,20 @@ set(DETRAY detray::io detray::detectors)
+ traccc_add_executable( seq_example_alpaka "apps/seq_example_alpaka.cpp"
+     LINK_LIBRARIES ${LIBRARIES} ${DETRAY}
+ )
++
++traccc_add_executable( reco_cpu "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../src/reconstruction/reco_cpu.cpp"
++    LINK_LIBRARIES ${LIBRARIES} ${DETRAY}
++)
++
++traccc_add_executable( hough_reco
++   "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../src/reconstruction/hough_reco.cpp" )
++   
++target_compile_definitions( traccc_hough_reco PRIVATE
++   RECO_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../../../../data" )
++
++target_compile_definitions( traccc_reco_cpu PRIVATE
++   RECO_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../../../../data" )
++
+ traccc_add_executable( seeding_example_alpaka "apps/seeding_example_alpaka.cpp"
+     LINK_LIBRARIES ${LIBRARIES}
+ )
+diff --git a/Traccc/examples/run/cuda/CMakeLists.txt b/Traccc/examples/run/cuda/CMakeLists.txt
+index d38092e09..b2cf31be8 100644
+--- a/Traccc/examples/run/cuda/CMakeLists.txt
++++ b/Traccc/examples/run/cuda/CMakeLists.txt
+@@ -56,6 +56,15 @@ traccc_add_executable( seq_example_cuda "apps/seq_example_cuda.cpp"
+                   traccc::options detray::detectors detray::io
+                   traccc::examples_common
+ )
++
++traccc_add_executable( reco_gpu  "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../src/reconstruction/reco_gpu.cpp"
++   LINK_LIBRARIES vecmem::core vecmem::cuda traccc::io traccc::performance
++                  traccc::core traccc::device_common traccc::cuda_utils traccc::cuda
++                  traccc::options traccc::examples_common detray::io detray::detectors )
++               
++target_compile_definitions( traccc_reco_gpu PRIVATE
++   RECO_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../../../../data" )
++
+ traccc_add_executable( seeding_example_cuda "apps/seeding_example_cuda.cpp"
+    LINK_LIBRARIES vecmem::core vecmem::cuda traccc::io traccc::performance
+                   traccc::core traccc::device_common traccc::cuda_utils traccc::cuda
+diff --git a/Traccc/examples/simulation/CMakeLists.txt b/Traccc/examples/simulation/CMakeLists.txt
+index b642bd070..4b0b7af3a 100644
+--- a/Traccc/examples/simulation/CMakeLists.txt
++++ b/Traccc/examples/simulation/CMakeLists.txt
+@@ -27,3 +27,9 @@ traccc_add_executable(simulate_wire_chamber "simulate_wire_chamber.cpp"
+     LINK_LIBRARIES vecmem::core traccc::io traccc::core
+     traccc::options traccc::simulation detray::io detray::test_common covfie::core Boost::filesystem
+ )
++
++traccc_add_executable(toy_mc
++    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../src/simulation/ToyMC.cpp"
++    LINK_LIBRARIES vecmem::core traccc::io traccc::core
++    traccc::options traccc::simulation detray::io detray::test_common covfie::core Boost::filesystem
++)
+\ No newline at end of file
+diff --git a/Traccc/simulation/CMakeLists.txt b/Traccc/simulation/CMakeLists.txt
+index 7c48ad425..8f88be28d 100644
+--- a/Traccc/simulation/CMakeLists.txt
++++ b/Traccc/simulation/CMakeLists.txt
+@@ -24,3 +24,4 @@ target_link_libraries(
+         detray::test_common
+         detray::test_utils
+ )
++
+diff --git a/Traccc/simulation/include/traccc/simulation/simulator.hpp b/Traccc/simulation/include/traccc/simulation/simulator.hpp
+index dce49a8f2..440afed44 100644
+--- a/Traccc/simulation/include/traccc/simulation/simulator.hpp
++++ b/Traccc/simulation/include/traccc/simulation/simulator.hpp
+@@ -19,6 +19,7 @@
+ 
+ // System include(s).
+ #include <limits>
++#include <cstdint>
+ #include <memory>
+ 
+ namespace traccc {
+@@ -35,6 +36,8 @@ struct simulator {
+ 
+     /// Particle hypothesis
+     traccc::pdg_particle<scalar_type> ptc_type{traccc::muon<scalar_type>()};
++    /// Offset added to the event number for the random seeds
++    std::uint64_t seed_offset = 0u;
+ 
+     // Simulation setup
+     bool do_energy_loss = true;
+@@ -114,8 +117,8 @@ struct simulator {
+                                             m_directory);
+ 
+       // Set random seed
+-      m_scatterer.set_seed(event_id);
+-      writer_state.set_seed(event_id);
++      m_scatterer.set_seed(m_cfg.seed_offset + event_id);
++      writer_state.set_seed(m_cfg.seed_offset + event_id);
+ 
+       auto actor_states = detray::tie(m_updater_state, m_scatterer,
+                                       m_aborter_state, writer_state);
