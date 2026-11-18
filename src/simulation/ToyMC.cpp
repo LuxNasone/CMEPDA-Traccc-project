@@ -32,6 +32,8 @@
 
 #include <boost/filesystem.hpp>
 
+#include "../utils.hpp"
+
 using namespace traccc;
 
 /**
@@ -55,22 +57,6 @@ struct toy_config {
 };
 
 /**
- * @brief Cuts all spaces in a string
- * @param text : (const std::string) input string
- * @return The substring without any spacing left
- */
-
-std::string trim(const std::string& text) {
-
-  const auto first = text.find_first_not_of(" \t\r");
-  if (first == std::string::npos) {
-    return "";
-  }
-  const auto last = text.find_last_not_of(" \t\r");
-  return text.substr(first, last - first + 1u);
-}
-
-/**
  * @brief Reads the path of the configuration files, where the simulation parameters are set
  * @param path : (const std::string) configuration file (.conf) path
  * @throws Runtime_Error if the path is not found or a non valid row (without "=") or type for the value is found
@@ -87,7 +73,7 @@ toy_config read_config(const std::string& path) {
   toy_config cfg;
   std::string line;
   while (std::getline(file, line)) {
-    line = trim(line.substr(0u, line.find('#')));
+    line = utils::trim(line.substr(0u, line.find('#')));
     if (line.empty()) {
       continue;
     }
@@ -96,8 +82,8 @@ toy_config read_config(const std::string& path) {
     if (separator == std::string::npos) {
       throw std::runtime_error("Riga non valida: " + line);
     }
-    const std::string key = trim(line.substr(0u, separator));
-    const std::string value = trim(line.substr(separator + 1u));
+    const std::string key = utils::trim(line.substr(0u, separator));
+    const std::string value = utils::trim(line.substr(separator + 1u));
 
     try {
       if (key == "barrel") {

@@ -33,6 +33,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include "../utils.hpp"
+
 namespace hough {
 
 /// Parameters of the Hough transform and of the fit (see config/hough.conf).
@@ -77,59 +79,7 @@ struct track {
     double rms_z_mm = 0.;           ///< RMS distance of the hits from the line
 };
 
-namespace detail {
-
-/// Removes spaces, tabs and carriage returns at both ends of a string.
-inline std::string trim(const std::string& text) {
-    const auto first = text.find_first_not_of(" \t\r");
-    if (first == std::string::npos) {
-        return "";
-    }
-    const auto last = text.find_last_not_of(" \t\r");
-    return text.substr(first, last - first + 1u);
-}
-
-/// Converts a whole string to a double; throws if it is not a number.
-inline double to_double(const std::string& key, const std::string& value) {
-    std::size_t used = 0;
-    double result = 0.;
-    try {
-        result = std::stod(value, &used);
-    } catch (const std::exception&) {
-        used = 0;
-    }
-    if (used == 0 || used != value.size() || !std::isfinite(result)) {
-        throw std::runtime_error("Invalid value for " + key + ": " + value);
-    }
-    return result;
-}
-
-/// Converts a whole string to a non-negative integer; throws otherwise.
-inline unsigned int to_unsigned(const std::string& key, const std::string& value) {
-    std::size_t used = 0;
-    unsigned long result = 0;
-    try {
-        result = value.empty() || value.front() == '-' ? 0 : std::stoul(value, &used);
-    } catch (const std::exception&) {
-        used = 0;
-    }
-    if (used == 0 || used != value.size() ||
-        result > std::numeric_limits<unsigned int>::max()) {
-        throw std::runtime_error("Invalid value for " + key + ": " + value);
-    }
-    return static_cast<unsigned int>(result);
-}
-
-/// Angle wrapped to [-pi, pi).
-inline double wrap(double angle) {
-    constexpr double two_pi = 2. * std::numbers::pi;
-    angle = std::fmod(angle + std::numbers::pi, two_pi);
-    if (angle < 0.) {
-        angle += two_pi;
-    }
-    return angle - std::numbers::pi;
-}
-
+namespace detail{
 /// Circle through the origin: centre and radius.
 struct circle {
     double xc = 0.;
@@ -401,7 +351,7 @@ inline config read_config(const std::string& path) {
     unsigned int number = 0;
     while (std::getline(file, raw)) {
         ++number;
-        const std::string line = detail::trim(raw.substr(0, raw.find('#')));
+        const std::string line = utils::trim(raw.substr(0, raw.find('#')));
         if (line.empty()) {
             continue;
         }
@@ -410,28 +360,28 @@ inline config read_config(const std::string& path) {
             throw std::runtime_error(path + ":" + std::to_string(number) +
                                      ": invalid line: " + line);
         }
-        const std::string key = detail::trim(line.substr(0, equal));
-        const std::string value = detail::trim(line.substr(equal + 1));
+        const std::string key = utils::trim(line.substr(0, equal));
+        const std::string value = utils::trim(line.substr(equal + 1));
         if (key == "cot-theta-bin") {
-            cfg.cot_theta_bin = detail::to_double(key, value);
+            cfg.cot_theta_bin = utils::to_double(key, value);
         } else if (key == "phi-bin-deg") {
-            cfg.phi_bin_deg = detail::to_double(key, value);
+            cfg.phi_bin_deg = utils::to_double(key, value);
         } else if (key == "kappa-bin-per-mm") {
-            cfg.kappa_bin_per_mm = detail::to_double(key, value);
+            cfg.kappa_bin_per_mm = utils::to_double(key, value);
         } else if (key == "min-pt-gev") {
-            cfg.min_pt_gev = detail::to_double(key, value);
+            cfg.min_pt_gev = utils::to_double(key, value);
         } else if (key == "bfield-tesla") {
-            cfg.bfield_tesla = detail::to_double(key, value);
+            cfg.bfield_tesla = utils::to_double(key, value);
         } else if (key == "min-modules") {
-            cfg.min_modules = detail::to_unsigned(key, value);
+            cfg.min_modules = utils::to_unsigned(key, value);
         } else if (key == "max-residual-xy-mm") {
-            cfg.max_residual_xy_mm = detail::to_double(key, value);
+            cfg.max_residual_xy_mm = utils::to_double(key, value);
         } else if (key == "max-residual-z-mm") {
-            cfg.max_residual_z_mm = detail::to_double(key, value);
+            cfg.max_residual_z_mm = utils::to_double(key, value);
         } else if (key == "max-z0-mm") {
-            cfg.max_z0_mm = detail::to_double(key, value);
+            cfg.max_z0_mm = utils::to_double(key, value);
         } else if (key == "max-shared-fraction") {
-            cfg.max_shared_fraction = detail::to_double(key, value);
+            cfg.max_shared_fraction = utils::to_double(key, value);
         } else {
             throw std::runtime_error(path + ":" + std::to_string(number) +
                                      ": unknown key: " + key);
@@ -504,7 +454,7 @@ inline std::vector<track> find_tracks(const std::vector<point>& pts, const confi
                     continue;  // the circle never reaches this radius
                 }
                 const double position =
-                    (detail::wrap(phi - std::asin(sine)) + pi) / phi_bin;
+                    (utils::wrap(phi - std::asin(sine)) + pi) / phi_bin;
                 const std::size_t j = static_cast<std::size_t>(position) % n_phi;
                 const std::size_t other =
                     position - std::floor(position) < 0.5 ? (j + n_phi - 1) % n_phi
@@ -589,6 +539,7 @@ inline std::vector<track> find_tracks(const std::vector<point>& pts, const confi
         accepted.push_back(std::move(t));
     }
     return accepted;
-}
+    
+} //namespace hough
 
 }  // namespace hough

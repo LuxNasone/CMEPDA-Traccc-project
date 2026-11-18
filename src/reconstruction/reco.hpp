@@ -15,8 +15,8 @@
 #pragma once
 
 // Project include(s).
-#include "spacepoint_writer.hpp"
-#include "track_csv_writer.hpp"
+#include "csv_writer.hpp"
+
 // reco.hpp is included before the backend headers, so every traccc type used
 // by the template must be declared here (non-dependent names are looked up
 // where the template is defined, not where it is instantiated).
@@ -79,12 +79,16 @@
 #include <utility>
 #include <vector>
 
+#include "../utils.hpp"
+
 // Output folder for the CSV files, set by CMake (see CMakeLists.txt).
 #ifndef RECO_DATA_DIR
 #define RECO_DATA_DIR "data"
 #endif
 
 namespace reco {
+
+using clock_type = utils::clock_type;
 
 /// Times of the reconstruction steps of one event, in milliseconds.
 struct event_times {
@@ -115,18 +119,11 @@ struct event_result {
     double t_end = 0.;    ///< End (after writing), same reference
 };
 
-using clock_type = std::chrono::steady_clock;
-
-/// Milliseconds elapsed from @p from to @p to.
-inline double ms_between(clock_type::time_point from, clock_type::time_point to) {
-    return std::chrono::duration<double, std::milli>(to - from).count();
-}
-
 /// Measures the time spent in a scope and stores it, in ms, in @p out.
 class scope_timer {
    public:
     explicit scope_timer(double& out) : m_out(out), m_start(clock_type::now()) {}
-    ~scope_timer() { m_out = ms_between(m_start, clock_type::now()); }
+    ~scope_timer() { m_out = utils::ms_between(m_start, clock_type::now()); }
     scope_timer(const scope_timer&) = delete;
     scope_timer& operator=(const scope_timer&) = delete;
 
@@ -239,7 +236,7 @@ class worker {
 
         event_result res;
         res.event = event;
-        res.t_start = ms_between(loop_start, clock_type::now());
+        res.t_start = utils::ms_between(loop_start, clock_type::now());
         event_times& times = res.times;
 
         traccc::edm::measurement_collection::buffer measurements_buffer;
@@ -368,7 +365,7 @@ class worker {
                                     evt_data);
         }
 
-        res.t_end = ms_between(loop_start, clock_type::now());
+        res.t_end = utils::ms_between(loop_start, clock_type::now());
         return res;
     }
 
@@ -554,7 +551,7 @@ int run(const traccc::opts::detector& detector_opts,
     for (auto& t : threads) {
         t.join();
     }
-    const double loop_ms = ms_between(loop_start, clock_type::now());
+    const double loop_ms = utils::ms_between(loop_start, clock_type::now());
 
     if (first_error) {
         std::rethrow_exception(first_error);
