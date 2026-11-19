@@ -1,5 +1,8 @@
+'''
+@file pixel_grid.py
+@brief defines a class that creates a pixel grid, customizable as the one in ToyMC.cpp
+'''
 import numpy as np
-
 
 class PixelGrid:
     '''

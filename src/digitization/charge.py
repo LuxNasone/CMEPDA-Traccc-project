@@ -1,3 +1,7 @@
+'''
+@file charge.py
+@brief defines two classes : one fro charge deposits and another one that simulates the spread of the charge in across the surrounding pixels
+'''
 import numpy as np
 from scipy.stats import moyal
 import math

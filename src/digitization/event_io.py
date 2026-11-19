@@ -1,3 +1,7 @@
+'''
+@file event_io.py
+@brief defines a class that handles reading/writing of the data/output
+'''
 import json
 from pathlib import Path
 

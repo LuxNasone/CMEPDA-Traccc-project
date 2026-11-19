@@ -1,3 +1,7 @@
+'''
+@file digitizer.py
+@brief defines a digitizer class that converts the raw measurements in cells
+'''
 from pixel_grid import*
 from charge import*
 from readout import*

@@ -53,7 +53,7 @@ def save_plots(figs, output):
     @param output : (str or Path) output PDF file
     '''
     output = Path(output)
-    output.parent.mkdir(parents=True, exist_ok=True)   # create the folder if missing
+    output.parent.mkdir(parents=True, exist_ok=True)   
     with PdfPages(output) as pdf:
         for fig in figs:
             pdf.savefig(fig, bbox_inches="tight")
@@ -80,8 +80,7 @@ def drop_warmup(data):
     if {"thread", "t_start_ms"}.issubset(data.columns):
         first = data.groupby("thread")["t_start_ms"].idxmin()
         return data.drop(index=first)
-    return data.iloc[1:]   # old files, one thread: the first row
-
+    return data.iloc[1:]   
 
 def summarize(path):
     '''
@@ -95,8 +94,6 @@ def summarize(path):
         raise ValueError(f"{path}: no events left after removing the warm-up")
 
     steps = [c for c in STEPS if c in data.columns]
-    # Reconstruction time: from the cells in memory to the fitted tracks in
-    # memory, i.e. without reading the file and writing the CSV.
     t_reco = data[steps].sum(axis=1)
 
     row = {
@@ -112,8 +109,6 @@ def summarize(path):
     for step in steps:
         row[step] = data[step].median()
 
-    # Throughput: events finished per second of loop time (needs the
-    # per-event start/end times of the multi-thread version).
     if {"t_start_ms", "t_end_ms"}.issubset(data.columns):
         span = data["t_end_ms"].max() - data["t_start_ms"].min()
         row["events_per_s"] = 1000. * len(data) / span if span > 0 else np.nan

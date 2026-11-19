@@ -1,5 +1,7 @@
 /**
- * @file Toy simulation program : simulates a cylindrical collider-like geometry (barrel-endcap) according to parameters set in simulation.conf
+ * @file Toy simulation program 
+ * @brief Simulates a cylindrical collider-like geometry (barrel-endcap) according to parameters set in simulation.conf. 
+ *        It's a modification to  acts/Traccc/examples/simulate_toy_detector.cpp
  */
 #include <cstdint>
 #include <exception>

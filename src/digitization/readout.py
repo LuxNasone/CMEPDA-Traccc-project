@@ -1,5 +1,8 @@
+'''
+@file readout.py
+@brief class that simulates readout (threshold & noise)
+'''
 import numpy as np
-
 
 class Readout:
     '''
