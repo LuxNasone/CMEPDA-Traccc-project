@@ -6,6 +6,7 @@
 #pragma once
 
 // Project include(s).
+#include "traccc/definitions/qualifiers.hpp"
 #include "traccc/definitions/primitives.hpp"
 #include "traccc/edm/track_constituent_link.hpp"
 #include "traccc/edm/track_container.hpp"
