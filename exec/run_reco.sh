@@ -171,12 +171,13 @@ for folder in "${folders[@]}"; do
         continue
     fi
 
-    if [ ! -f "$reco_out/performance.csv" ]; then
-        echo "No $reco_out/performance.csv found: set RECO_OUT to the folder" \
-             "that contains reco_${backend}" >&2
-        continue
+    saved="logs/$name.log"
+    if [ -f "$reco_out/performance.csv" ]; then
+        mv "$reco_out/performance.csv" "$logs_dir/$name.csv"
+        saved+=", logs/$name.csv"
+    else
+        echo "WARNING: no performance.csv in $reco_out" >&2
     fi
-    mv "$reco_out/performance.csv" "$logs_dir/$name.csv"
 
     # Tracks and spacepoints of this dataset, each in its own folder (the
     # folders of a previous run of the same dataset are replaced).
@@ -194,7 +195,6 @@ for folder in "${folders[@]}"; do
         mv "${sp_files[@]}" "$sp_dir/"
     fi
 
-    saved="logs/$name.{log,csv}"
     [ ${#track_files[@]} -gt 0 ] && saved+=", tracks/$name/"
     [ ${#sp_files[@]} -gt 0 ] && saved+=", spacepoints/$name/"
     echo "Saved in $results: $saved"
