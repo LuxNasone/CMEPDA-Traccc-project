@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Runs traccc_reco_<cpu|gpu> on one or more data folders. The program always
 # writes to the same folder (RECO_OUT/reco_<backend>), so after each dataset
-# its files are moved to results/reco/[threads_N/]:
-#   logs/<backend>_<dataset>.log           output of the program
-#   logs/<backend>_<dataset>.csv           per-event performance
-#   logs/<backend>_<dataset>_gpu_util.log  GPU utilization (gpu backend only)
-#   tracks/<backend>_<dataset>/            event*-tracks.csv, event*-track-measurements.csv
-#   spacepoints/<backend>_<dataset>/       event*-spacepoints.csv (with --write-spacepoints)
+# its files are moved to results/reco/threads_N/<dataset>/:
+#   logs/<backend>_reco.log         output of the program
+#   logs/<backend>_performance.csv  per-event times
+#   logs/gpu_util.log               GPU utilization (gpu backend only)
+#   tracks/                         event*-tracks.csv, event*-track-measurements.csv
+#   spacepoints/                    event*-spacepoints.csv (with --write-spacepoints)
+# The temporary folder RECO_OUT/reco_<backend> is removed at the end.
 #
 # Usage: ./exec/run_reco.sh <cpu|gpu> <data folder>... [-- extra traccc options]
 # Examples:
@@ -15,16 +16,16 @@
 #   ./exec/run_reco.sh gpu data/data/run_* -- --input-events=5
 #   ./exec/run_reco.sh gpu data/data/run_* -- --input-events=100 --threads=4
 #
-# With --threads=N the results go to results/reco/threads_N/, so that runs
-# with a different number of threads do not overwrite each other.
+# N is the value of --threads (1 if not given), so that runs with a different
+# number of threads do not overwrite each other.
 #
 # With the gpu backend the GPU utilization is sampled every second with
 # "nvidia-smi dmon" while each dataset is reconstructed. GPU_ID selects the
 # GPU to monitor (default: 0).
 #
 # The traccc options are read from config/reco.conf (or from the file in the
-# RECO_CONFIG variable). RECO_OUT is the folder the program writes to, i.e.
-# RECO_DATA_DIR in CMake (default: data).
+# RECO_CONFIG variable). RECO_OUT/reco_<backend> is the folder the program
+# writes to, i.e. RECO_DATA_DIR in CMake (default: results).
 set -euo pipefail
 
 if [ $# -lt 2 ]; then
@@ -52,8 +53,9 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# Number of threads, if given, to keep the results of different runs apart.
-threads_dir=""
+# Number of threads (1 by default, as in traccc_reco), to keep the results of
+# different runs apart.
+threads_dir="threads_1"
 for arg in "${extra[@]+"${extra[@]}"}"; do
     case "$arg" in
         --threads=*) threads_dir="threads_${arg#--threads=}" ;;
@@ -62,9 +64,8 @@ done
 
 app=traccc-build/bin/traccc_reco_${backend}
 config=${RECO_CONFIG:-config/reco.conf}
-reco_out=${RECO_OUT:-data}/reco_${backend}
-results=results/reco${threads_dir:+/$threads_dir}
-logs_dir=$results/logs
+reco_out=${RECO_OUT:-results}/reco_${backend}
+results=results/reco/$threads_dir
 gpu_id=${GPU_ID:-0}
 
 if [ ! -x "$app" ]; then
@@ -75,7 +76,7 @@ if [ ! -f "$config" ]; then
     echo "Configuration file not found: $config" >&2
     exit 1
 fi
-mkdir -p "$logs_dir"
+mkdir -p "$results"
 
 # GPU monitoring: only for the gpu backend, and only if nvidia-smi exists.
 monitor_gpu=false
@@ -144,12 +145,15 @@ for folder in "${folders[@]}"; do
         fi
     done
 
-    name=${backend}_${dataset}
-    log="$logs_dir/$name.log"
-    util_log="$logs_dir/${name}_gpu_util.log"
-    tracks_dir="$results/tracks/$name"
-    sp_dir="$results/spacepoints/$name"
-    echo "==> $backend on $dataset${threads_dir:+ ($threads_dir)}"
+    run_dir="$results/$dataset"
+    logs_dir="$run_dir/logs"
+    tracks_dir="$run_dir/tracks"
+    sp_dir="$run_dir/spacepoints"
+    log="$logs_dir/${backend}_reco.log"
+    perf="$logs_dir/${backend}_performance.csv"
+    util_log="$logs_dir/gpu_util.log"
+    mkdir -p "$logs_dir"
+    echo "==> $backend on $dataset ($threads_dir)"
     # Remove the files of the previous dataset, so that they are never moved
     # to the wrong folder.
     rm -f "$reco_out/performance.csv" "$reco_out"/event*.csv
@@ -171,10 +175,8 @@ for folder in "${folders[@]}"; do
         continue
     fi
 
-    saved="logs/$name.log"
     if [ -f "$reco_out/performance.csv" ]; then
-        mv "$reco_out/performance.csv" "$logs_dir/$name.csv"
-        saved+=", logs/$name.csv"
+        mv "$reco_out/performance.csv" "$perf"
     else
         echo "WARNING: no performance.csv in $reco_out" >&2
     fi
@@ -195,10 +197,11 @@ for folder in "${folders[@]}"; do
         mv "${sp_files[@]}" "$sp_dir/"
     fi
 
-    [ ${#track_files[@]} -gt 0 ] && saved+=", tracks/$name/"
-    [ ${#sp_files[@]} -gt 0 ] && saved+=", spacepoints/$name/"
-    echo "Saved in $results: $saved"
+    echo "Saved in $run_dir"
 done
+
+# The temporary output folder of the program, if nothing is left in it.
+rmdir "$reco_out" 2> /dev/null || true
 
 if [ ${#failed[@]} -gt 0 ]; then
     echo "Failed datasets: ${failed[*]} (see the logs in $results)" >&2
