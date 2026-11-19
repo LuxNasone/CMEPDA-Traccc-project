@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# Runs traccc_reco_<cpu|gpu> on one or more data folders. For each folder it
-# saves the log and a copy of the per-event performance file in results/reco/,
-# because the program always writes to the same output folder.
+# Runs traccc_reco_<cpu|gpu> on one or more data folders. The program always
+# writes to the same folder (RECO_OUT/reco_<backend>), so after each dataset
+# its files are moved to results/reco/[threads_N/]:
+#   logs/<backend>_<dataset>.log           output of the program
+#   logs/<backend>_<dataset>.csv           per-event performance
+#   logs/<backend>_<dataset>_gpu_util.log  GPU utilization (gpu backend only)
+#   tracks/<backend>_<dataset>/            event*-tracks.csv, event*-track-measurements.csv
+#   spacepoints/<backend>_<dataset>/       event*-spacepoints.csv (with --write-spacepoints)
 #
 # Usage: ./exec/run_reco.sh <cpu|gpu> <data folder>... [-- extra traccc options]
 # Examples:
@@ -14,9 +19,8 @@
 # with a different number of threads do not overwrite each other.
 #
 # With the gpu backend the GPU utilization is sampled every second with
-# "nvidia-smi dmon" while each dataset is reconstructed, and saved in
-# results/reco/[threads_N/]gpu_util/gpu_<dataset>.log. GPU_ID selects the GPU
-# to monitor (default: 0).
+# "nvidia-smi dmon" while each dataset is reconstructed. GPU_ID selects the
+# GPU to monitor (default: 0).
 #
 # The traccc options are read from config/reco.conf (or from the file in the
 # RECO_CONFIG variable). RECO_OUT is the folder the program writes to, i.e.
@@ -60,7 +64,7 @@ app=traccc-build/bin/traccc_reco_${backend}
 config=${RECO_CONFIG:-config/reco.conf}
 reco_out=${RECO_OUT:-data}/reco_${backend}
 results=results/reco${threads_dir:+/$threads_dir}
-util_dir=$results/gpu_util
+logs_dir=$results/logs
 gpu_id=${GPU_ID:-0}
 
 if [ ! -x "$app" ]; then
@@ -71,14 +75,13 @@ if [ ! -f "$config" ]; then
     echo "Configuration file not found: $config" >&2
     exit 1
 fi
-mkdir -p "$results"
+mkdir -p "$logs_dir"
 
 # GPU monitoring: only for the gpu backend, and only if nvidia-smi exists.
 monitor_gpu=false
 if [ "$backend" = gpu ]; then
     if command -v nvidia-smi > /dev/null; then
         monitor_gpu=true
-        mkdir -p "$util_dir"
     else
         echo "WARNING: nvidia-smi not found, the GPU utilization is not recorded" >&2
     fi
@@ -141,11 +144,15 @@ for folder in "${folders[@]}"; do
         fi
     done
 
-    log="$results/${backend}_${dataset}.log"
-    util_log="$util_dir/${backend}_${dataset}.log"
+    name=${backend}_${dataset}
+    log="$logs_dir/$name.log"
+    util_log="$logs_dir/${name}_gpu_util.log"
+    tracks_dir="$results/tracks/$name"
+    sp_dir="$results/spacepoints/$name"
     echo "==> $backend on $dataset${threads_dir:+ ($threads_dir)}"
-    # Remove the file of the previous dataset, so that it is never copied by mistake.
-    rm -f "$reco_out/performance.csv"
+    # Remove the files of the previous dataset, so that they are never moved
+    # to the wrong folder.
+    rm -f "$reco_out/performance.csv" "$reco_out"/event*.csv
 
     # GPU utilization, one sample per second, for this dataset only.
     if [ "$monitor_gpu" = true ]; then
@@ -164,16 +171,33 @@ for folder in "${folders[@]}"; do
         continue
     fi
 
-    if [ -f "$reco_out/performance.csv" ]; then
-        cp "$reco_out/performance.csv" "$results/${backend}_${dataset}.csv"
-        echo "Saved: $results/${backend}_${dataset}.csv and $log"
-        if [ "$monitor_gpu" = true ]; then
-            echo "GPU utilization: $util_log"
-        fi
-    else
+    if [ ! -f "$reco_out/performance.csv" ]; then
         echo "No $reco_out/performance.csv found: set RECO_OUT to the folder" \
              "that contains reco_${backend}" >&2
+        continue
     fi
+    mv "$reco_out/performance.csv" "$logs_dir/$name.csv"
+
+    # Tracks and spacepoints of this dataset, each in its own folder (the
+    # folders of a previous run of the same dataset are replaced).
+    rm -rf "$tracks_dir" "$sp_dir"
+    shopt -s nullglob
+    track_files=("$reco_out"/event*-track*.csv)
+    sp_files=("$reco_out"/event*-spacepoints.csv)
+    shopt -u nullglob
+    if [ ${#track_files[@]} -gt 0 ]; then
+        mkdir -p "$tracks_dir"
+        mv "${track_files[@]}" "$tracks_dir/"
+    fi
+    if [ ${#sp_files[@]} -gt 0 ]; then
+        mkdir -p "$sp_dir"
+        mv "${sp_files[@]}" "$sp_dir/"
+    fi
+
+    saved="logs/$name.{log,csv}"
+    [ ${#track_files[@]} -gt 0 ] && saved+=", tracks/$name/"
+    [ ${#sp_files[@]} -gt 0 ] && saved+=", spacepoints/$name/"
+    echo "Saved in $results: $saved"
 done
 
 if [ ${#failed[@]} -gt 0 ]; then
