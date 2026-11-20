@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import performance as perf
+import timing_performance as perf
 
 ## The script, to run it as a program
 SCRIPT = Path(perf.__file__)

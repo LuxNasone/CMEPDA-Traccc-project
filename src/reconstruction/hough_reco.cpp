@@ -11,8 +11,13 @@
  * scripts, and one row of performance.csv with the time of the Hough
  * transform.
  *
+ * The events are independent, so with --threads=N they are shared among N
+ * threads: each thread takes the next event not yet processed, as in
+ * traccc_reco (reco.hpp). The algorithm itself runs on one thread per event.
+ *
  * Usage:
- *   hough_reco <spacepoints folder> [--config config/hough.conf] [--output folder]
+ *   hough_reco <spacepoints folder> [--config config/hough.conf]
+ *              [--output folder] [--threads N]
  */
 
 // Project include(s).
@@ -29,11 +34,16 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <algorithm>
+#include <atomic>
 #include <map>
+#include <mutex>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 // Data folder of the project, set by CMake (see CMakeLists.txt). The default
@@ -137,23 +147,85 @@ void write_tracks(const std::filesystem::path& folder, std::size_t event,
     }
 }
 
+/// Result of one event, written to performance.csv once all threads are done.
+struct event_result {
+    std::size_t event = 0;
+    unsigned int thread = 0;
+    std::size_t n_spacepoints = 0;
+    std::size_t n_tracks = 0;
+    double t_read_ms = 0.;   ///< reading of the spacepoint file
+    double t_hough_ms = 0.;  ///< Hough transform and track fit
+    double t_start_ms = 0.;  ///< start of the event, from the start of the event loop
+    double t_end_ms = 0.;    ///< end of the event (tracks written), same origin
+};
+
+/**
+ * @brief Processes one event: reads its spacepoints, finds the tracks and
+ *        writes them. Each event has its own files, so several events can be
+ *        processed at the same time.
+ * @param event Event number.
+ * @param path Spacepoint file of the event.
+ * @param output Output folder of the tracks.
+ * @param cfg Configuration of the Hough transform.
+ * @param thread Index of the thread that processes the event.
+ * @param loop_start Start of the event loop, origin of t_start_ms and t_end_ms.
+ * @return Sizes and times of the event.
+ * @throws std::runtime_error if a file cannot be read or written.
+ */
+event_result process_event(std::size_t event, const std::filesystem::path& path,
+                           const std::filesystem::path& output, const hough::config& cfg,
+                           unsigned int thread, clock_type::time_point loop_start) {
+    event_result res;
+    res.event = event;
+    res.thread = thread;
+    res.t_start_ms = utils::ms_since(loop_start);
+
+    const auto start = clock_type::now();
+    const std::vector<spacepoint_row> rows = read_spacepoints(path);
+    res.t_read_ms = utils::ms_since(start);
+
+    // Input of the Hough transform; index = row of the spacepoint file
+    std::vector<hough::point> points;
+    points.reserve(rows.size());
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        points.push_back({rows[i].x, rows[i].y, rows[i].z, rows[i].geometry_id, i});
+    }
+
+    // Only the Hough transform and the track fit are timed, not the I/O
+    const auto hough_start = clock_type::now();
+    const std::vector<hough::track> tracks = hough::find_tracks(points, cfg);
+    res.t_hough_ms = utils::ms_since(hough_start);
+
+    write_tracks(output, event, rows, tracks);
+    res.n_spacepoints = rows.size();
+    res.n_tracks = tracks.size();
+    res.t_end_ms = utils::ms_since(loop_start);
+    return res;
+}
+
 }  // namespace
 
 /**
  * @brief Main routine: Hough transform on every event of a spacepoints folder.
  * @param argc Number of command line arguments.
- * @param argv The spacepoints folder, then --config and --output (optional).
+ * @param argv The spacepoints folder, then --config, --output and --threads
+ *        (optional).
  * @return 0 on success, 1 on a wrong command line or an error.
  */
 int main(int argc, char* argv[]) {
     std::filesystem::path input, config_path = "config/hough.conf",
                                  output = RECO_DATA_DIR "/reco_hough";
+    std::string threads_arg = "1";
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
         } else if (arg == "--output" && i + 1 < argc) {
             output = argv[++i];
+        } else if (arg == "--threads" && i + 1 < argc) {
+            threads_arg = argv[++i];
+        } else if (arg.rfind("--threads=", 0) == 0) {
+            threads_arg = arg.substr(std::string("--threads=").size());
         } else if (input.empty() && arg.rfind("--", 0) != 0) {
             input = arg;
         } else {
@@ -163,11 +235,15 @@ int main(int argc, char* argv[]) {
     }
     if (input.empty()) {
         std::cerr << "Usage: " << argv[0] << " <spacepoints folder> "
-                  << "[--config config/hough.conf] [--output folder]\n";
+                  << "[--config config/hough.conf] [--output folder] [--threads N]\n";
         return 1;
     }
 
     try {
+        const unsigned int n_threads = utils::to_unsigned("--threads", threads_arg);
+        if (n_threads == 0) {
+            throw std::runtime_error("--threads must be at least 1");
+        }
         const hough::config cfg = hough::read_config(config_path.string());
 
         // Spacepoint files of the input folder, sorted by event number
@@ -199,40 +275,65 @@ int main(int argc, char* argv[]) {
         if (!perf) {
             throw std::runtime_error("Cannot open " + (output / "performance.csv").string());
         }
-        perf << "backend,event,n_spacepoints,n_fitted_tracks,t_read_ms,t_hough_ms,"
-                "t_wall_ms\n";
+        perf << "backend,event,thread,n_spacepoints,n_fitted_tracks,t_read_ms,"
+                "t_hough_ms,t_wall_ms,t_start_ms,t_end_ms\n";
+
+        // Event loop: every thread takes the next event not yet processed.
+        // Each result goes to its own slot, so the threads never write the
+        // same memory; the first error stops all of them.
+        const std::vector<std::pair<std::size_t, std::filesystem::path>> todo(
+            events.begin(), events.end());
+        std::vector<event_result> results(todo.size());
+        std::atomic<std::size_t> next{0};
+        std::atomic<bool> stop{false};
+        std::exception_ptr first_error;
+        std::mutex error_mutex;
+
+        const unsigned int used_threads =
+            static_cast<unsigned int>(std::min<std::size_t>(n_threads, todo.size()));
+        const auto loop_start = clock_type::now();
+        std::vector<std::thread> workers;
+        for (unsigned int t = 0; t < used_threads; ++t) {
+            workers.emplace_back([&, t] {
+                try {
+                    for (std::size_t i = next++; i < todo.size() && !stop; i = next++) {
+                        results[i] = process_event(todo[i].first, todo[i].second, output,
+                                                   cfg, t, loop_start);
+                    }
+                } catch (...) {
+                    const std::lock_guard<std::mutex> lock(error_mutex);
+                    if (!first_error) {
+                        first_error = std::current_exception();
+                    }
+                    stop = true;
+                }
+            });
+        }
+        for (std::thread& w : workers) {
+            w.join();
+        }
+        const double loop_ms = utils::ms_since(loop_start);
+        if (first_error) {
+            std::rethrow_exception(first_error);
+        }
 
         double total_hough = 0.;
         std::size_t total_tracks = 0;
-        for (const auto& [event, path] : events) {
-            const auto start = clock_type::now();
-            const std::vector<spacepoint_row> rows = read_spacepoints(path);
-            const double t_read = utils::ms_since(start);
-
-            // Input of the Hough transform; index = row of the spacepoint file
-            std::vector<hough::point> points;
-            points.reserve(rows.size());
-            for (std::size_t i = 0; i < rows.size(); ++i) {
-                points.push_back({rows[i].x, rows[i].y, rows[i].z, rows[i].geometry_id, i});
-            }
-
-            // Only the Hough transform and the track fit are timed, not the I/O
-            const auto hough_start = clock_type::now();
-            const std::vector<hough::track> tracks = hough::find_tracks(points, cfg);
-            const double t_hough = utils::ms_since(hough_start);
-
-            write_tracks(output, event, rows, tracks);
-            perf << "hough," << event << ',' << rows.size() << ',' << tracks.size() << ','
-                 << t_read << ',' << t_hough << ',' << t_read + t_hough << '\n';
-            total_hough += t_hough;
-            total_tracks += tracks.size();
+        for (const event_result& r : results) {
+            perf << "hough," << r.event << ',' << r.thread << ',' << r.n_spacepoints << ','
+                 << r.n_tracks << ',' << r.t_read_ms << ',' << r.t_hough_ms << ','
+                 << r.t_end_ms - r.t_start_ms << ',' << r.t_start_ms << ',' << r.t_end_ms
+                 << '\n';
+            total_hough += r.t_hough_ms;
+            total_tracks += r.n_tracks;
         }
 
-        std::cout << "Hough transform: " << events.size() << " events, " << total_tracks
-                  << " tracks, " << total_hough << " ms ("
-                  << total_hough / static_cast<double>(events.size())
-                  << " ms/event). Tracks and performance.csv in " << output.string()
-                  << '\n';
+        const double n_events = static_cast<double>(results.size());
+        std::cout << "Hough transform: " << results.size() << " events, " << total_tracks
+                  << " tracks, " << total_hough / n_events << " ms/event (Hough only). "
+                  << "Event loop: " << loop_ms << " ms with " << used_threads
+                  << " thread(s) -> " << 1000. * n_events / loop_ms << " events/s.\n"
+                  << "Tracks and performance.csv in " << output.string() << '\n';
     } catch (const std::exception& error) {
         std::cerr << "Error: " << error.what() << '\n';
         return 1;

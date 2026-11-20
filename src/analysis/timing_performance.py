@@ -60,14 +60,55 @@ def save_plots(figs, output):
     print(f"{len(figs)} plots saved in {output}")
 
 
+def run_name(path):
+    '''
+    @brief name of the run a file belongs to. Two layouts are accepted:
+           - one file per run, named after it: gpu_run_500.csv -> gpu_run_500
+           - the layout of run_reco.sh, one folder per run:
+             run_500/logs/gpu_performance.csv -> run_500, and for the Hough
+             transform run_500/hough/performance.csv -> run_500
+    @param path : Path of the performance file or of the GPU log
+    @return (str) the name of the run, or None if the file belongs to none
+    '''
+    # Only names ending in run_<N>: the summary tables written by this script
+    # (e.g. threads_8.csv) must not be taken for runs
+    if re.search(r"run_\d+$", path.stem):
+        return path.stem
+    if path.parent.name in ("logs", "hough") and \
+            re.fullmatch(r"run_\d+", path.parent.parent.name):
+        return path.parent.parent.name
+    return None
+
+
 def run_number(path):
     '''
-    @brief number of particles of a run, read from its name (gpu_run_500.csv -> 500)
-    @param path : Path of the performance file
+    @brief number of particles of a run, read from its name
+           (gpu_run_500.csv or run_500/logs/gpu_performance.csv -> 500)
+    @param path : Path of the performance file or of the GPU log
     @return (int) the number in the name, or None if there is none
     '''
-    match = re.search(r"(\d+)$", path.stem)
+    name = run_name(path)
+    match = re.search(r"(\d+)$", name) if name else None
     return int(match.group(1)) if match else None
+
+
+def performance_files(folder, backend="gpu"):
+    '''
+    @brief performance files of the runs of a series
+    @param folder : (str or Path) folder of the series: either with one
+           <backend>_run_<N>.csv per run, or with one run_<N>/ folder per run
+           (layout of run_reco.sh: run_<N>/logs/<backend>_performance.csv, and
+           run_<N>/hough/performance.csv for the Hough transform)
+    @param backend : gpu or cpu (traccc_reco), or hough (traccc_hough_reco)
+    @return list of Paths
+    '''
+    folder = Path(folder)
+    if backend == "hough":
+        return [p for p in folder.glob("run_*/hough/performance.csv")
+                if run_number(p) is not None]
+    flat = folder.glob("*.csv")
+    nested = folder.glob(f"run_*/logs/{backend}_performance.csv")
+    return [p for p in (*flat, *nested) if run_number(p) is not None]
 
 
 def drop_warmup(data):
@@ -97,7 +138,7 @@ def summarize(path):
     t_reco = data[steps].sum(axis=1)
 
     row = {
-        "run": path.stem,
+        "run": run_name(path),
         "particles": run_number(path),
         "events": len(data),
         "n_spacepoints": data["n_spacepoints"].median(),
@@ -115,13 +156,14 @@ def summarize(path):
     return row
 
 
-def load_series(folder):
+def load_series(folder, backend="gpu"):
     '''
-    @brief summarizes every performance file of a folder, one row per run
-    @param folder : (str or Path) folder with the .csv performance files
+    @brief summarizes every performance file of a series, one row per run
+    @param folder : (str or Path) folder of the series (see performance_files)
+    @param backend : gpu or cpu (traccc_reco), or hough (traccc_hough_reco)
     @return DataFrame sorted by number of spacepoints
     '''
-    files = [p for p in Path(folder).glob("*.csv") if run_number(p) is not None]
+    files = performance_files(folder, backend)
     if not files:
         raise SystemExit(f"No performance .csv files in {folder}")
     rows = [summarize(p) for p in tqdm(files, desc=f"Reading {Path(folder).name:12s}")]
@@ -167,11 +209,15 @@ def read_gpu_util(path):
 def load_gpu_util(folder):
     '''
     @brief mean GPU utilization of every run of a folder of dmon logs
-    @param folder : (str or Path) folder with one log per run (run_500.log, ...)
+    @param folder : (str or Path) folder with one log per run (run_500.log, ...),
+           or folder of a series in the layout of run_reco.sh
+           (run_500/logs/gpu_util.log, ...)
     @return DataFrame with the columns particles, gpu_sm, gpu_mem, gpu_samples
     '''
+    folder = Path(folder)
+    paths = sorted(folder.glob("*.log")) + sorted(folder.glob("run_*/logs/gpu_util.log"))
     rows = []
-    for path in tqdm(sorted(Path(folder).glob("*.log")),
+    for path in tqdm(paths,
                      desc=f"GPU logs {Path(folder).name:11s}"):
         particles = run_number(path)
         if particles is None:
@@ -220,29 +266,33 @@ def natural_key(path):
     return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", path.name)]
 
 
-def has_runs(folder):
+def has_runs(folder, backend="gpu"):
     '''
     @brief tells whether a folder contains performance files of runs
     @param folder : Path of the folder
-    @return (bool) True if it holds at least one <backend>_run_<N>.csv
+    @param backend : gpu or cpu (traccc_reco), or hough (traccc_hough_reco)
+    @return (bool) True if it holds at least one <backend>_run_<N>.csv or
+            run_<N>/logs/<backend>_performance.csv
     '''
-    return any(run_number(p) is not None for p in folder.glob("*.csv"))
+    return bool(performance_files(folder, backend))
 
 
-def expand_folders(folders):
+def expand_folders(folders, backend="gpu"):
     '''
     @brief turns the folders given on the command line into the list of
            series: a folder with performance files is one series, and each
            of its subfolders with performance files (threads_2, threads_4,
            ...) is one more, in natural order
     @param folders : list of folder names
+    @param backend : gpu or cpu (traccc_reco), or hough (traccc_hough_reco)
     @return list of Paths, without repetitions
     '''
     found = []
     for folder in map(Path, folders):
-        if has_runs(folder):
+        if has_runs(folder, backend):
             found.append(folder)
-        subfolders = sorted((d for d in folder.iterdir() if d.is_dir() and has_runs(d)),
+        subfolders = sorted((d for d in folder.iterdir()
+                             if d.is_dir() and has_runs(d, backend)),
                             key=natural_key) if folder.is_dir() else []
         found += subfolders
     unique = list(dict.fromkeys(p.resolve() for p in found))
@@ -267,11 +317,14 @@ def series_label(folder):
 
 def util_folder(folder):
     '''
-    @brief folder of the nvidia-smi dmon logs that goes with a series: for
-           results/reco/threads_N it is results/reco/gpu_util_tN
+    @brief folder of the nvidia-smi dmon logs that goes with a series: the
+           series itself in the layout of run_reco.sh (run_N/logs/gpu_util.log),
+           otherwise results/reco/gpu_util_tN for results/reco/threads_N
     @param folder : Path of the series
     @return Path of the logs, or None if there is none
     '''
+    if any(folder.glob("run_*/logs/gpu_util.log")):
+        return folder
     match = re.fullmatch(r"threads_(\d+)", folder.name)
     if match:
         candidate = folder.parent / f"gpu_util_t{match.group(1)}"
@@ -359,15 +412,24 @@ if __name__ == "__main__":
         description="Plots the performance files of the runs. Every folder is "
                     "one series (e.g. cpu, gpu, gpu with 4 threads).")
     parser.add_argument("folders", nargs="+",
-                        help="folders with performance files; the subfolders with "
-                             "performance files (e.g. threads_N) are added too, so "
-                             "results/reco alone gives every thread count")
+                        help="folders with performance files (one <backend>_run_N.csv "
+                             "per run, or one run_N/ folder per run as written by "
+                             "run_reco.sh); the subfolders with performance files "
+                             "(e.g. threads_N) are added too, so results/reco alone "
+                             "gives every thread count")
+    parser.add_argument("-b", "--backend", nargs="+", default=["gpu"],
+                        choices=["gpu", "cpu", "hough"],
+                        help="reconstructions to read: gpu or cpu (traccc_reco), hough "
+                             "(traccc_hough_reco, run_N/hough/performance.csv); with "
+                             "more than one, every folder gives one series per "
+                             "reconstruction (default: gpu)")
     parser.add_argument("-l", "--labels", nargs="+",
                         help="legend label of every series (default: 'N threads' "
                              "for threads_N folders, otherwise the folder name)")
     parser.add_argument("-u", "--util", nargs="+",
                         help="folders with the nvidia-smi dmon logs, one per series and "
-                             "in the same order (default: gpu_util_tN next to threads_N)")
+                             "in the same order (default: the run_N/logs/gpu_util.log "
+                             "of the series, or gpu_util_tN next to threads_N)")
     parser.add_argument("-n", "--name", default=None,
                         help="name of the PDF (default: names of the series)")
     parser.add_argument("-o", "--output", default="results",
@@ -375,24 +437,34 @@ if __name__ == "__main__":
     parser.add_argument("--show", action="store_true", help="also open the plots on screen")
     args = parser.parse_args()
 
-    folders = expand_folders(args.folders)
-    labels = args.labels or [series_label(f) for f in folders]
+    # One series per (folder, reconstruction)
+    pairs = [(f, b) for b in args.backend for f in expand_folders(args.folders, b)]
+    folders = [f for f, _ in pairs]
+    backends = [b for _, b in pairs]
+    if args.labels:
+        labels = args.labels
+    elif len(args.backend) > 1:
+        labels = [f"{series_label(f)} ({b})" for f, b in pairs]
+    else:
+        labels = [series_label(f) for f in folders]
     if len(labels) != len(folders):
         raise SystemExit(f"Give one label per series: found {len(folders)} series ("
-                         + ", ".join(str(f) for f in folders) + ")")
+                         + ", ".join(f"{f} ({b})" for f, b in pairs) + ")")
     print("Series:")
-    for label, folder in zip(labels, folders):
-        print(f"  {label:12s} {folder}")
+    for label, (folder, backend) in zip(labels, pairs):
+        print(f"  {label:20s} {folder} ({backend})")
 
-    series = {label: load_series(folder) for label, folder in zip(labels, folders)}
+    series = {label: load_series(folder, backend)
+              for label, (folder, backend) in zip(labels, pairs)}
 
-    # GPU utilization, matched to the runs by their number of particles
+    # GPU utilization, matched to the runs by their number of particles (only
+    # for the series reconstructed on the GPU)
     if args.util:
         if len(args.util) != len(folders):
             raise SystemExit("Give one folder of GPU logs per series")
         logs = [Path(u) for u in args.util]
     else:
-        logs = [util_folder(f) for f in folders]
+        logs = [util_folder(f) if b == "gpu" else None for f, b in pairs]
     for label, folder in zip(labels, logs):
         if folder is not None:
             series[label] = series[label].merge(load_gpu_util(folder),
