@@ -34,14 +34,14 @@ except ImportError:  # tqdm not installed: a minimal text progress bar
 ## Reconstruction steps, in chain order, with their labels. File reading is
 ## kept apart: it is the same for every algorithm and depends on the disk.
 STEPS = {
-    "t_h2d_ms": "H2D copy",
-    "t_clusterization_ms": "Clusterization",
-    "t_spacepoints_ms": "Spacepoint formation",
+    #"t_h2d_ms": "H2D copy",
+    #"t_clusterization_ms": "Clusterization",
+    #"t_spacepoints_ms": "Spacepoint formation",
     "t_seeding_ms": "Seeding",
     "t_params_ms": "Track params",
     "t_finding_ms": "Track finding",
     "t_fitting_ms": "Track fitting",
-    "t_d2h_ms": "D2H copy",
+    #"t_d2h_ms": "D2H copy",
     "t_hough_ms": "Hough transform",   # hough_reco: replaces seeding to fitting
 }
 

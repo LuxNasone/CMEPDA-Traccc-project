@@ -3,6 +3,9 @@
 
 From the files written by the toy MC and by the digitizer it draws, in one PDF
 (and optionally as PNG images for the README):
+  - a first page with the parameters of the run: those of the configuration
+    file of the simulation, if there is one, and those measured on the data
+    (particles, pT, eta, vertex, layers, pixels, noise);
   - one event in the transverse (x-y) and longitudinal (r-z) views, with the
     true hits of every particle joined in order and coloured by its pT;
   - the hits of many events in the x-y and r-z views (where the detector is);
@@ -13,9 +16,15 @@ The barrel layers are found from the hits themselves: the modules (geometry_id)
 whose hits spread more along z than along r are barrel modules, and modules at
 similar radius form a layer.
 
+The configuration file is the *.conf found in the run folder, or the one given
+with --config. Its values are shown as they are written in the file: options
+given on the command line of the simulation (e.g. gen-nparticles=1000) are not
+in it, so the values measured on the data are always shown as well.
+
 Usage:
     python src/analysis/event_display.py <run folder> [--event N] [--max-events N]
-                                         [--layers 0 2 -1] [-o results] [--png-dir docs/images]
+                                         [--layers 0 2 -1] [--config FILE]
+                                         [-o results] [--png-dir docs/images]
 '''
 
 import argparse
@@ -55,6 +64,9 @@ NOISE_ID = 18446744073709551615
 
 ## Minimum radial gap (mm) between two barrel layers
 LAYER_GAP_MM = 10.0
+
+## Rows of the parameter table that fit in one page
+ROWS_PER_PAGE = 36
 
 
 def event_file(folder, event, kind):
@@ -263,6 +275,156 @@ def draw_occupancy(cells, modules, index, n_events):
     return fig
 
 
+def read_config_file(path):
+    '''
+    @brief reads a configuration file of "key = value" (or "--key=value") lines
+    @param path : (Path) the file; "#" starts a comment
+    @return (list) (key, value) pairs in the order of the file; a line
+            without "=" is kept as a key with an empty value
+    '''
+    pairs = []
+    for line in Path(path).read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        key, _, value = line.partition("=")
+        pairs.append((key.strip().lstrip("-"), value.strip()))
+    return pairs
+
+
+def find_config_file(folder):
+    '''
+    @brief configuration file of the simulation saved in a run folder
+    @param folder : (Path) run folder
+    @return (Path) the first *.conf of the folder, or None if there is none
+    '''
+    found = sorted(folder.glob("*.conf"))
+    return found[0] if found else None
+
+
+def describe_range(values, unit="", fmt=".3g"):
+    '''
+    @brief "min - max (median m)" text of a set of values
+    @param values : array-like of numbers
+    @param unit : (str) unit written after the numbers
+    @param fmt : (str) format of the numbers
+    @return (str) the text, or "-" if there are no values
+    '''
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return "-"
+    unit = f" {unit}" if unit else ""
+    return (f"{values.min():{fmt}} - {values.max():{fmt}}{unit} "
+            f"(median {np.median(values):{fmt}}{unit})")
+
+
+def run_parameters(folder, events, map_events, event, particles, hits, layers, radii,
+                   cells=None, config=None):
+    '''
+    @brief parameters of a run, for the first page of the PDF
+    @param folder : (Path) run folder
+    @param events : (list of int) all the events of the run
+    @param map_events : (list of int) events used for the maps
+    @param event : (int) event drawn alone
+    @param particles : DataFrame of the particles_initial of map_events, with
+           an "event" column
+    @param hits : DataFrame of the hits of map_events, with r
+    @param layers : (dict) barrel layers, as from find_barrel_layers
+    @param radii : (list) radii of the barrel layers
+    @param cells : DataFrame of the cells of map_events, or None if not read
+    @param config : (Path) configuration file of the simulation, or None
+    @return (dict) section title -> list of (name, value) pairs
+    '''
+    sections = {}
+    sections["Run"] = [
+        ("Folder", str(folder.resolve())),
+        ("Events in the folder", f"{len(events)} ({events[0]} - {events[-1]})"),
+        ("Events used for the maps", str(len(map_events))),
+        ("Event drawn alone", str(event)),
+    ]
+
+    per_event = particles.groupby("event").size()
+    pt = np.hypot(particles["px"], particles["py"])
+    eta = np.arcsinh(particles["pz"] / pt.where(pt > 0))
+    phi = np.arctan2(particles["py"], particles["px"])
+    measured = [
+        ("Particles per event", describe_range(per_event, fmt=".0f")),
+        ("pT", describe_range(pt, "GeV")),
+        ("eta", describe_range(eta)),
+        ("phi", describe_range(phi, "rad")),
+    ]
+    if "q" in particles.columns:
+        positive = float((particles["q"] > 0).mean())
+        measured.append(("Charge", f"{positive:.1%} positive, {1 - positive:.1%} negative"))
+    for axis in ("vx", "vy", "vz"):
+        if axis in particles.columns:
+            measured.append((f"Vertex {axis[1]} (mean, std)",
+                             f"{particles[axis].mean():.3g}, {particles[axis].std():.3g} mm"))
+    hits_per_particle = hits.groupby(["event", "particle_id"]).size()
+    measured.append(("Hits per particle", describe_range(hits_per_particle, fmt=".0f")))
+    measured.append(("Hits per event", describe_range(hits.groupby("event").size(), fmt=".0f")))
+    sections["Simulation, measured on the data"] = measured
+
+    detector = [
+        ("Modules with hits", str(hits["geometry_id"].nunique())),
+        ("Barrel layers", str(len(layers))),
+    ]
+    if radii:
+        detector.append(("Barrel radii", ", ".join(f"{r:.0f}" for r in radii) + " mm"))
+    if cells is not None and not cells.empty:
+        noise = cells["measurement_id"] == NOISE_ID
+        detector += [
+            ("Pixel matrix (channel0 x channel1)",
+             f"{int(cells['channel0'].max()) + 1} x {int(cells['channel1'].max()) + 1}"),
+            ("Cells per event", describe_range(cells.groupby("event").size(), fmt=".0f")),
+            ("Noise cells", f"{noise.mean():.2%} of the cells"),
+        ]
+    sections["Detector and digitization"] = detector
+
+    if config is not None:
+        sections[f"Configuration file: {config}"] = (
+            read_config_file(config) or [("(empty file)", "")])
+    else:
+        sections["Configuration file"] = [
+            ("not found", "no *.conf in the run folder; give one with --config")]
+    return sections
+
+
+def draw_parameter_pages(title, sections, rows_per_page=ROWS_PER_PAGE):
+    '''
+    @brief the parameters as a two-column table, split in as many pages as needed
+    @param title : (str) title of the pages
+    @param sections : (dict) section title -> list of (name, value) pairs
+    @param rows_per_page : (int) rows of one page, section titles included
+    @return list of matplotlib figures
+    '''
+    rows = []
+    for section, pairs in sections.items():
+        rows.append((section, None))
+        rows += [(str(name), str(value)) for name, value in pairs]
+
+    pages = [rows[i:i + rows_per_page] for i in range(0, len(rows), rows_per_page)]
+    figs = []
+    for number, page in enumerate(pages, start=1):
+        fig = plt.figure(figsize=(8.27, 11.69))   # A4
+        suffix = f" ({number}/{len(pages)})" if len(pages) > 1 else ""
+        fig.text(0.06, 0.96, title + suffix, fontsize=14, weight="bold", va="top")
+        y, step = 0.92, 0.88 / rows_per_page
+        for name, value in page:
+            if value is None:   # section title
+                fig.text(0.06, y, name, fontsize=11, weight="bold", va="top")
+                fig.add_artist(plt.Line2D([0.06, 0.94], [y - 0.017, y - 0.017],
+                                          color="grey", lw=0.5))
+            else:
+                fig.text(0.08, y, name, fontsize=9, va="top")
+                fig.text(0.42, y, value, fontsize=9, va="top", family="monospace",
+                         wrap=True)
+            y -= step
+        figs.append(fig)
+    return figs
+
+
 def save(figs, pdf_path, png_dir=None):
     '''
     @brief saves the figures in one PDF, one per page, and optionally as PNG
@@ -292,6 +454,9 @@ def main():
     parser.add_argument("--layers", type=int, nargs="+", default=[0, -1],
                         help="barrel layers of the maps; negative = from the outside "
                              "(default: 0 -1, innermost and outermost)")
+    parser.add_argument("--config", type=Path, default=None,
+                        help="configuration file of the simulation to show in the "
+                             "parameter page (default: the *.conf of the run folder)")
     parser.add_argument("-o", "--output", type=Path, default=Path("results"),
                         help="output folder of the PDF (default: results)")
     parser.add_argument("--png-dir", type=Path, default=None,
@@ -315,12 +480,18 @@ def main():
     one = add_cylindrical(read_many(args.folder, [event], "hits",
                                     ["particle_id", "geometry_id", "tx", "ty", "tz"]))
     pt = particle_pt(pd.read_csv(event_file(args.folder, event, "particles_initial")))
+    particles = read_many(args.folder, map_events, "particles_initial")
+
+    config = args.config if args.config is not None else find_config_file(args.folder)
+    if config is not None and not config.is_file():
+        parser.error(f"configuration file not found: {config}")
 
     figs = [("event_xy", draw_event(one, pt, radii, "xy")),
             ("event_rz", draw_event(one, pt, radii, "rz")),
             ("hits_xy", draw_hit_density(hits, "xy", len(map_events))),
             ("hits_rz", draw_hit_density(hits, "rz", len(map_events)))]
 
+    cells = None
     if layers:
         chosen = sorted({i % len(layers) for i in args.layers if -len(layers) <= i < len(layers)})
         cells = read_many(args.folder, map_events, "cells",
@@ -332,6 +503,12 @@ def main():
                          draw_occupancy(cells, layers[i], i, len(map_events))))
     else:
         print("No barrel layer found: the layer maps are skipped")
+
+    # Parameter page(s) first, so that every PDF says how it was made
+    sections = run_parameters(args.folder, events, map_events, event, particles, hits,
+                              layers, radii, cells, config)
+    pages = draw_parameter_pages(f"Run {args.folder.resolve().name}: parameters", sections)
+    figs = [(f"parameters_{i}", fig) for i, fig in enumerate(pages, start=1)] + figs
 
     save(figs, args.output / f"{args.folder.resolve().name}_display.pdf", args.png_dir)
 
