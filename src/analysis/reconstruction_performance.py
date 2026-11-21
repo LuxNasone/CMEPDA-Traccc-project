@@ -16,6 +16,14 @@ The reconstructed tracks are compared with the truth of the simulation:
 The track parameters are given on the surface of the first measurement of the
 track, so they are compared with the true hit on that surface.
 
+If the tracks file has the covariance of the parameters (columns cov_<a>_<b>,
+written by csv_writer.hpp), the errors of the fit are checked too:
+  - pulls of phi, theta, q/p and pT, (fit - true) / error, which must be
+    Gaussian with mean 0 and width 1 if the errors are right;
+  - their width against the true pT (multiple scattering grows at low pT);
+  - the chi2 of (phi, theta, q/p) with the full 3x3 covariance, which must
+    follow a chi2 with 3 degrees of freedom (flat p-value).
+
 Input, one of:
   - a single run: its tracks folder (e.g. data/reco_gpu, right after the
     reconstruction) and its simulated run folder with the truth;
@@ -28,6 +36,7 @@ Usage:
 '''
 
 import argparse
+import math
 import re
 from pathlib import Path
 
@@ -192,6 +201,101 @@ def add_residuals(tracks):
     pt_true = np.hypot(t["tpx"], t["tpy"])
     t["rel_pt"] = (pt_reco - pt_true) / pt_true
     t["pt_hit"] = pt_true
+    return t
+
+
+## Parameters of the pulls: column, axis label
+PULLS = (("pull_phi", "phi"), ("pull_theta", "theta"), ("pull_qop", "q/p"), ("pull_pt", "pT"))
+
+## Parameters of the chi2 test, in the order of the covariance columns
+CHI2_PARAMS = ("phi", "theta", "qop")
+
+
+def has_covariance(tracks):
+    '''
+    @brief tells whether the tracks have the covariance of the fit
+    @param tracks : DataFrame of tracks
+    @return (bool) True if the columns of the (phi, theta, qop) block are there
+    '''
+    names = {f"cov_{a}_{b}" for i, a in enumerate(CHI2_PARAMS) for b in CHI2_PARAMS[i:]}
+    return names.issubset(tracks.columns)
+
+
+def robust_width(values):
+    '''
+    @brief width of a distribution that the tails do not inflate: half of the
+           16-84% interval (equal to sigma for a Gaussian)
+    @param values : array-like of numbers
+    @return (float) the width, NaN without values
+    '''
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.nan
+    low, high = np.percentile(values, [16, 84])
+    return 0.5 * (high - low)
+
+
+def chi2_3_sf(x):
+    '''
+    @brief survival function (p-value) of a chi2 with 3 degrees of freedom
+    @param x : array of chi2 values (>= 0)
+    @return array of p-values
+    '''
+    x = np.asarray(x, dtype=float)
+    erfc = np.vectorize(math.erfc, otypes=[float])
+    return erfc(np.sqrt(x / 2)) + np.sqrt(2 * x / np.pi) * np.exp(-x / 2)
+
+
+def add_pulls(t):
+    '''
+    @brief pulls of the fitted parameters and chi2 of (phi, theta, q/p), from
+           the covariance of the fit
+    @param t : matched tracks with residuals (add_residuals) and the columns
+           cov_<a>_<b>
+    @return t with pull_phi, pull_theta, pull_qop, pull_pt, chi2_3 and
+            chi2_3_pval; tracks with a non positive variance get NaN
+    '''
+    t = t.copy()
+    p_true = np.sqrt(t["tpx"] ** 2 + t["tpy"] ** 2 + t["tpz"] ** 2)
+    t["res_qop"] = t["qop"] - t["q"] / p_true
+
+    def error(name):
+        var = t[f"cov_{name}_{name}"]
+        return np.sqrt(var.where(var > 0))
+
+    t["pull_phi"] = t["res_phi"] / error("phi")
+    t["pull_theta"] = t["res_theta"] / error("theta")
+    t["pull_qop"] = t["res_qop"] / error("qop")
+
+    # pT = sin(theta) / |q/p|: error propagated with the theta - q/p block
+    abs_qop = np.abs(t["qop"])
+    d_theta = np.cos(t["theta"]) / abs_qop
+    d_qop = -np.sin(t["theta"]) * np.sign(t["qop"]) / t["qop"] ** 2
+    var_pt = (d_theta ** 2 * t["cov_theta_theta"] + d_qop ** 2 * t["cov_qop_qop"]
+              + 2 * d_theta * d_qop * t["cov_theta_qop"])
+    pt_reco = np.sin(t["theta"]) / abs_qop
+    t["pull_pt"] = (pt_reco - t["pt_hit"]) / np.sqrt(var_pt.where(var_pt > 0))
+
+    # chi2 = r^T C^-1 r with the 3x3 covariance of (phi, theta, q/p)
+    n = len(t)
+    cov = np.empty((n, 3, 3))
+    for i, a in enumerate(CHI2_PARAMS):
+        for j, b in enumerate(CHI2_PARAMS):
+            name = f"cov_{a}_{b}" if i <= j else f"cov_{b}_{a}"
+            cov[:, i, j] = t[name].to_numpy(dtype=float)
+    res = t[["res_phi", "res_theta", "res_qop"]].to_numpy(dtype=float)
+    chi2 = np.full(n, np.nan)
+    good = np.isfinite(cov).all(axis=(1, 2)) & np.isfinite(res).all(axis=1)
+    if good.any():
+        # Only positive definite matrices: the others come from failed fits
+        positive = np.zeros(n, dtype=bool)
+        positive[good] = np.linalg.eigvalsh(cov[good]).min(axis=1) > 0
+        if positive.any():
+            solved = np.linalg.solve(cov[positive], res[positive][..., None])[..., 0]
+            chi2[positive] = np.einsum("ij,ij->i", res[positive], solved)
+    t["chi2_3"] = chi2
+    t["chi2_3_pval"] = np.where(np.isfinite(chi2), chi2_3_sf(np.nan_to_num(chi2)), np.nan)
     return t
 
 
@@ -405,6 +509,92 @@ def plot_fit_quality(runs):
     return fig
 
 
+def plot_pulls(runs):
+    '''
+    @brief pulls of phi, theta, q/p and pT, one panel per parameter and one
+           line per run, with the unit Gaussian they must follow
+    @param runs : list of (label, tracks with pulls) pairs
+    @return the matplotlib figure
+    '''
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
+    edges = np.linspace(-5, 5, 51)
+    x = np.linspace(-5, 5, 201)
+    for ax, (column, name) in zip(axes.flat, PULLS):
+        for label, t in runs:
+            v = t[column].dropna()
+            if v.empty:
+                continue
+            ax.hist(v, bins=edges, histtype="step", linewidth=1.5, density=True,
+                    label=f"{label}: mean {v.median():.2f}, width {robust_width(v):.2f}")
+        ax.plot(x, np.exp(-x ** 2 / 2) / np.sqrt(2 * np.pi), "k--", lw=0.8,
+                label="N(0, 1)")
+        ax.set_xlabel(f"pull of {name} = (fit - true) / error")
+        ax.set_ylabel("normalized tracks")
+        ax.legend(fontsize=6)
+    fig.suptitle("Pulls of the fitted parameters (matched tracks); "
+                 "median and half of the 16-84% interval in the legend")
+    fig.tight_layout()
+    return fig
+
+
+def plot_pull_width(runs, edges):
+    '''
+    @brief width of the pulls against the true pT: 1 if the errors are right,
+           a trend with pT points to multiple scattering or energy loss
+    @param runs : list of (label, tracks with pulls) pairs
+    @param edges : pT bin edges in GeV
+    @return the matplotlib figure
+    '''
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True)
+    centres = np.sqrt(edges[1:] * edges[:-1])
+    for ax, (column, name) in zip(axes.flat, PULLS):
+        for label, t in runs:
+            bins = pd.cut(t["pt_hit"], edges)
+            width = t.groupby(bins, observed=False)[column].agg(robust_width)
+            ax.plot(centres, width.to_numpy(), marker="o", ms=3, label=label)
+        ax.axhline(1, color="grey", lw=0.8, ls="--")
+        ax.set_xscale("log")
+        ax.set_xlabel("true pT [GeV]")
+        ax.set_ylabel(f"width of the pull of {name}")
+        ax.grid(True, which="both", alpha=0.3)
+        ax.legend(fontsize=6)
+    fig.suptitle("Width of the pulls against pT (1 = correct errors)")
+    fig.tight_layout()
+    return fig
+
+
+def plot_chi2_3(runs):
+    '''
+    @brief chi2 of (phi, theta, q/p) against the truth with the 3x3 covariance:
+           it follows a chi2 with 3 degrees of freedom, and its p-value is flat,
+           if the covariance (correlations included) is right
+    @param runs : list of (label, tracks with chi2_3) pairs
+    @return the matplotlib figure
+    '''
+    fig, (ax_c, ax_p) = plt.subplots(1, 2, figsize=(12, 4.5))
+    edges = np.linspace(0, 15, 61)
+    x = np.linspace(1e-3, 15, 300)
+    for label, t in runs:
+        chi2 = t["chi2_3"].dropna()
+        if chi2.empty:
+            continue
+        ax_c.hist(chi2.clip(upper=edges[-1]), bins=edges, histtype="step", density=True,
+                  label=f"{label}: mean {chi2.mean():.2f} (3 expected)")
+        ax_p.hist(t["chi2_3_pval"].dropna(), bins=np.linspace(0, 1, 21), histtype="step",
+                  density=True, label=label)
+    ax_c.plot(x, np.sqrt(x) * np.exp(-x / 2) / np.sqrt(2 * np.pi), "k--", lw=0.8,
+              label="chi2, 3 d.o.f.")
+    ax_p.axhline(1, color="k", ls="--", lw=0.8, label="flat")
+    ax_c.set_xlabel("chi2 of (phi, theta, q/p) against the truth (last bin: overflow)")
+    ax_p.set_xlabel("p-value of that chi2")
+    for ax in (ax_c, ax_p):
+        ax.set_ylabel("normalized tracks")
+        ax.legend(fontsize=6)
+    fig.suptitle("Covariance of the fit against the truth (matched tracks)")
+    fig.tight_layout()
+    return fig
+
+
 def find_runs(folders, data_root):
     '''
     @brief finds the track folders and their truth folders
@@ -475,7 +665,10 @@ def main():
         rows.append({"series": series, "run": run, "particles": n,
                      **summarize(tracks, particles)})
         eff_runs.append((label, particles))
-        res_runs.append((label, add_residuals(tracks)))
+        residuals = add_residuals(tracks)
+        if has_covariance(residuals):
+            residuals = add_pulls(residuals)
+        res_runs.append((label, residuals))
         fit_runs.append((label, tracks))
 
     summary = pd.DataFrame(rows)
@@ -490,6 +683,18 @@ def main():
         if fig is not None:
             figs.append(fig)
     figs.append(plot_fit_quality(fit_runs))
+
+    # Errors of the fit, for the runs with the covariance in their tracks file
+    pull_runs = [(label, t) for label, t in res_runs if "pull_phi" in t]
+    if pull_runs:
+        figs += [plot_pulls(pull_runs), plot_pull_width(pull_runs, pt_edges),
+                 plot_chi2_3(pull_runs)]
+        for label, t in pull_runs:
+            widths = ", ".join(f"{name} {robust_width(t[col]):.2f}" for col, name in PULLS)
+            print(f"{label}: width of the pulls: {widths}; "
+                  f"mean chi2(phi, theta, q/p) {t['chi2_3'].mean():.2f} (3 expected)")
+    else:
+        print("No covariance in the tracks files: the pulls are not drawn")
 
     args.output.mkdir(parents=True, exist_ok=True)
     pdf_path = args.output / f"{args.name}.pdf"
