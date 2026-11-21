@@ -9,7 +9,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 try:
     from tqdm import tqdm
-except ImportError:  # tqdm not installed: a minimal text progress bar
+except ImportError:  
     import sys
 
     def tqdm(iterable, desc="", total=None, **_):
