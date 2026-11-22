@@ -180,7 +180,8 @@ def test_load_series_traccc(reco_tree):
     assert list(s["run"]) == ["run_10", "run_100"]
     assert list(s["particles"]) == [10, 100]
     assert list(s["events"]) == [3, 3]          # 5 events - 1 per thread
-    assert s["t_reco_ms"].tolist() == pytest.approx([8.0, 8.0])
+    summed = [c for c in perf.STEPS if c != "t_hough_ms"]
+    assert s["t_reco_ms"].tolist() == pytest.approx([float(len(summed))] * 2)
     assert s["events_per_s"].notna().all()
 
 
