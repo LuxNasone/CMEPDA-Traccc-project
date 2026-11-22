@@ -23,3 +23,4 @@ wget-log*
 !config/*.json
 traccc-install/
 reco-build/
+traccc_before_cmake_split.patch

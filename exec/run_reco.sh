@@ -60,7 +60,7 @@ for arg in "${extra[@]+"${extra[@]}"}"; do
     esac
 done
 
-app=traccc-build/bin/traccc_reco_${backend}
+app=reco-build/bin/traccc_reco_${backend}
 config=${RECO_CONFIG:-config/reco.conf}
 reco_out=${RECO_OUT:-results}/reco_${backend}
 results=results/reco/$threads_dir
