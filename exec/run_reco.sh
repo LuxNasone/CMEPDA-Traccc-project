@@ -4,7 +4,6 @@
 # its files are moved to results/reco/threads_N/<dataset>/:
 #   logs/<backend>_reco.log         output of the program
 #   logs/<backend>_performance.csv  per-event times
-#   logs/gpu_util.log               GPU utilization (gpu backend only)
 #   tracks/                         event*-tracks.csv, event*-track-measurements.csv
 #   spacepoints/                    event*-spacepoints.csv (with --write-spacepoints)
 # The temporary folder RECO_OUT/reco_<backend> is removed at the end.
@@ -19,9 +18,8 @@
 # N is the value of --threads (1 if not given), so that runs with a different
 # number of threads do not overwrite each other.
 #
-# With the gpu backend the GPU utilization is sampled every second with
-# "nvidia-smi dmon" while each dataset is reconstructed. GPU_ID selects the
-# GPU to monitor (default: 0).
+# To run on a given GPU, select it with CUDA_VISIBLE_DEVICES (and
+# CUDA_DEVICE_ORDER=PCI_BUS_ID, so that its number is the one of nvidia-smi).
 #
 # The traccc options are read from config/reco.conf (or from the file in the
 # RECO_CONFIG variable). RECO_OUT/reco_<backend> is the folder the program
@@ -66,7 +64,6 @@ app=traccc-build/bin/traccc_reco_${backend}
 config=${RECO_CONFIG:-config/reco.conf}
 reco_out=${RECO_OUT:-results}/reco_${backend}
 results=results/reco/$threads_dir
-gpu_id=${GPU_ID:-0}
 
 if [ ! -x "$app" ]; then
     echo "Application not found: $app (run this script from the project folder)" >&2
@@ -77,28 +74,6 @@ if [ ! -f "$config" ]; then
     exit 1
 fi
 mkdir -p "$results"
-
-# GPU monitoring: only for the gpu backend, and only if nvidia-smi exists.
-monitor_gpu=false
-if [ "$backend" = gpu ]; then
-    if command -v nvidia-smi > /dev/null; then
-        monitor_gpu=true
-    else
-        echo "WARNING: nvidia-smi not found, the GPU utilization is not recorded" >&2
-    fi
-fi
-
-# PID of the running "nvidia-smi dmon", empty when none is running.
-dmon_pid=""
-stop_gpu_monitor() {
-    if [ -n "$dmon_pid" ]; then
-        kill "$dmon_pid" 2> /dev/null || true
-        wait "$dmon_pid" 2> /dev/null || true
-        dmon_pid=""
-    fi
-}
-# Stop the monitor also if the script ends early (error or Ctrl+C).
-trap stop_gpu_monitor EXIT
 
 # Options of the configuration file, without comments and empty lines.
 conf_options=()
@@ -151,23 +126,15 @@ for folder in "${folders[@]}"; do
     sp_dir="$run_dir/spacepoints"
     log="$logs_dir/${backend}_reco.log"
     perf="$logs_dir/${backend}_performance.csv"
-    util_log="$logs_dir/gpu_util.log"
     mkdir -p "$logs_dir"
     echo "==> $backend on $dataset ($threads_dir)"
     # Remove the files of the previous dataset, so that they are never moved
     # to the wrong folder.
     rm -f "$reco_out/performance.csv" "$reco_out"/event*.csv
 
-    # GPU utilization, one sample per second, for this dataset only.
-    if [ "$monitor_gpu" = true ]; then
-        nvidia-smi dmon -s u -i "$gpu_id" -o T > "$util_log" &
-        dmon_pid=$!
-    fi
-
     # A failure on one dataset must not stop the others.
     status=0
     "$app" "${options[@]}" "${extra[@]+"${extra[@]}"}" 2>&1 | tee "$log" || status=$?
-    stop_gpu_monitor
 
     if [ "$status" -ne 0 ]; then
         echo "FAILED: $backend on $dataset, see $log" >&2

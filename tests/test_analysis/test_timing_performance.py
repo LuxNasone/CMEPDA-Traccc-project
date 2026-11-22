@@ -1,8 +1,7 @@
 """
 Tests of the folder layouts read by timing_performance.py: one performance
 file per run (gpu_run_<N>.csv) and the layout of run_reco.sh, with one folder
-per run (run_<N>/logs/<backend>_performance.csv, run_<N>/logs/gpu_util.log,
-run_<N>/hough/performance.csv).
+per run (run_<N>/logs/<backend>_performance.csv, run_<N>/hough/performance.csv).
 """
 from pathlib import Path
 
@@ -10,18 +9,6 @@ import pandas as pd
 import pytest
 
 import timing_performance as perf
-
-## Lines of a "nvidia-smi dmon -s u -o T" log: 3 busy seconds between idle ones
-DMON_LOG = """\
-#Time        gpu     sm    mem    enc    dec
-#HH:MM:SS    Idx      %      %      %      %
-12:00:00       0      0      0      0      0
-12:00:01       0     40     20      0      0
-12:00:02       0     60     30      0      0
-12:00:03       0     50     10      0      0
-12:00:04       0      0      0      0      0
-"""
-
 
 def write_traccc_performance(path, n_spacepoints, n_events=5, threads=1):
     '''
@@ -68,7 +55,7 @@ def write_hough_performance(path, n_spacepoints, n_events=5, threads=1):
 def reco_tree(tmp_path):
     '''
     @brief results/reco as written by run_reco.sh and traccc_hough_reco: two
-           thread counts, two runs each, with GPU logs and Hough results, plus
+           thread counts, two runs each, with traccc and Hough results, plus
            a summary table of a previous analysis that must be ignored
     @return Path of the reco folder
     '''
@@ -79,7 +66,6 @@ def reco_tree(tmp_path):
             run = series / f"run_{particles}"
             write_traccc_performance(run / "logs" / "gpu_performance.csv", n_sp,
                                      threads=threads)
-            (run / "logs" / "gpu_util.log").write_text(DMON_LOG)
             (run / "logs" / "gpu_reco.log").write_text("output of traccc 123\n")
             write_hough_performance(run / "hough" / "performance.csv", n_sp,
                                     threads=threads)
@@ -92,10 +78,8 @@ def reco_tree(tmp_path):
 
 @pytest.mark.parametrize("path, name, number", [
     ("results/reco/gpu_run_500.csv", "gpu_run_500", 500),
-    ("results/reco/gpu_util_t1/run_500.log", "run_500", 500),
     ("reco/threads_8/run_500/logs/gpu_performance.csv", "run_500", 500),
     ("reco/threads_8/run_500/logs/cpu_performance.csv", "run_500", 500),
-    ("reco/threads_8/run_500/logs/gpu_util.log", "run_500", 500),
     ("reco/threads_8/run_500/hough/performance.csv", "run_500", 500),
 ])
 def test_run_name_and_number(path, name, number):
@@ -174,13 +158,14 @@ def test_expand_folders_without_runs(tmp_path):
 def test_load_series_traccc(reco_tree):
     '''
     @brief one row per run, sorted by spacepoints, warm-up event of every
-           thread removed; the reconstruction time is the sum of the 8 steps
+           thread removed; the reconstruction time is the sum of the steps in
+           STEPS (1 ms each in the test files)
     '''
     s = perf.load_series(reco_tree / "threads_2", "gpu")
     assert list(s["run"]) == ["run_10", "run_100"]
     assert list(s["particles"]) == [10, 100]
     assert list(s["events"]) == [3, 3]          # 5 events - 1 per thread
-    summed = [c for c in perf.STEPS if c != "t_hough_ms"]
+    summed = [c for c in perf.STEPS if c != "t_hough_ms"]   # all in the test files
     assert s["t_reco_ms"].tolist() == pytest.approx([float(len(summed))] * 2)
     assert s["events_per_s"].notna().all()
 
@@ -196,36 +181,3 @@ def test_load_series_hough(reco_tree):
     assert s["t_hough_ms"].tolist() == pytest.approx([3.0, 3.0])
     # 4 events (warm-up removed) from t = 5 to t = 24.5 ms
     assert s["events_per_s"].tolist() == pytest.approx([1000. * 4 / 19.5] * 2)
-
-
-# --- GPU utilization --------------------------------------------------------
-
-def test_util_folder_new_layout(reco_tree):
-    '''
-    @brief with the run_reco.sh layout the GPU logs are in the series itself
-    '''
-    series = reco_tree / "threads_1"
-    assert perf.util_folder(series) == series
-
-
-def test_util_folder_old_layout(tmp_path):
-    '''
-    @brief with the old layout the logs of threads_N are in gpu_util_tN
-    '''
-    (tmp_path / "threads_4").mkdir()
-    (tmp_path / "gpu_util_t4").mkdir()
-    assert perf.util_folder(tmp_path / "threads_4") == tmp_path / "gpu_util_t4"
-    (tmp_path / "threads_8").mkdir()
-    assert perf.util_folder(tmp_path / "threads_8") is None
-
-
-def test_load_gpu_util_new_layout(reco_tree):
-    '''
-    @brief only the gpu_util.log of every run are read (not the logs of
-           traccc), and the idle seconds at the edges are removed
-    '''
-    util = perf.load_gpu_util(reco_tree / "threads_1").sort_values("particles")
-    assert list(util["particles"]) == [10, 100]
-    assert util["gpu_sm"].tolist() == pytest.approx([50.0, 50.0])
-    assert util["gpu_mem"].tolist() == pytest.approx([20.0, 20.0])
-    assert list(util["gpu_samples"]) == [3, 3]

@@ -34,14 +34,14 @@ except ImportError:
 ## Reconstruction steps, in chain order, with their labels. File reading is
 ## kept apart: it is the same for every algorithm and depends on the disk.
 STEPS = {
-    "t_h2d_ms": "H2D copy",
-    "t_clusterization_ms": "Clusterization",
-    "t_spacepoints_ms": "Spacepoint formation",
+    #"t_h2d_ms": "H2D copy",
+    #"t_clusterization_ms": "Clusterization",
+    #"t_spacepoints_ms": "Spacepoint formation",
     "t_seeding_ms": "Seeding",
     "t_params_ms": "Track params",
     "t_finding_ms": "Track finding",
     "t_fitting_ms": "Track fitting",
-    "t_d2h_ms": "D2H copy",
+    #"t_d2h_ms": "D2H copy",
     "t_hough_ms": "Hough transform",  
 }
 
@@ -67,7 +67,7 @@ def run_name(path):
            - the layout of run_reco.sh, one folder per run:
              run_500/logs/gpu_performance.csv -> run_500, and for the Hough
              transform run_500/hough/performance.csv -> run_500
-    @param path : Path of the performance file or of the GPU log
+    @param path : Path of the performance file
     @return (str) the name of the run, or None if the file belongs to none
     '''
     # Only names ending in run_<N>: the summary tables written by this script
@@ -84,7 +84,7 @@ def run_number(path):
     '''
     @brief number of particles of a run, read from its name
            (gpu_run_500.csv or run_500/logs/gpu_performance.csv -> 500)
-    @param path : Path of the performance file or of the GPU log
+    @param path : Path of the performance file
     @return (int) the number in the name, or None if there is none
     '''
     name = run_name(path)
@@ -170,95 +170,6 @@ def load_series(folder, backend="gpu"):
     return pd.DataFrame(rows).sort_values("n_spacepoints")
 
 
-def read_gpu_util(path):
-    '''
-    @brief reads a log of "nvidia-smi dmon -s u" (with or without -o T)
-    @param path : Path of the log
-    @return DataFrame with one row per second and the columns sm and mem
-            (% of time the multiprocessors / the memory were busy). The idle
-            seconds before the first and after the last busy one are removed:
-            they are the start-up and the end of the program, not the event loop
-    '''
-    names, rows = None, []
-    with open(path) as log:
-        for line in log:
-            fields = line.split()
-            if not fields:
-                continue
-            if line.startswith("#"):
-                # First header line: the column names (the second has the units)
-                if names is None and "sm" in fields[1:]:
-                    names = fields[1:] if fields[0] == "#" else [fields[0][1:]] + fields[1:]
-                continue
-            rows.append(fields)
-    if names is None or not rows:
-        return pd.DataFrame(columns=["sm", "mem"])
-    # Rows shorter than the header are dropped: the last line can be cut when
-    # nvidia-smi dmon is stopped while writing it
-    rows = [r[:len(names)] for r in rows if len(r) >= len(names)]
-    if not rows:
-        return pd.DataFrame(columns=["sm", "mem"])
-    data = pd.DataFrame(rows, columns=names)
-    data = data[["sm", "mem"]].apply(pd.to_numeric, errors="coerce").dropna()
-    busy = np.flatnonzero(data["sm"].to_numpy() > 0)
-    if busy.size == 0:
-        return data.iloc[0:0]
-    return data.iloc[busy[0]:busy[-1] + 1]
-
-
-def load_gpu_util(folder):
-    '''
-    @brief mean GPU utilization of every run of a folder of dmon logs
-    @param folder : (str or Path) folder with one log per run (run_500.log, ...),
-           or folder of a series in the layout of run_reco.sh
-           (run_500/logs/gpu_util.log, ...)
-    @return DataFrame with the columns particles, gpu_sm, gpu_mem, gpu_samples
-    '''
-    folder = Path(folder)
-    paths = sorted(folder.glob("*.log")) + sorted(folder.glob("run_*/logs/gpu_util.log"))
-    rows = []
-    for path in tqdm(paths,
-                     desc=f"GPU logs {Path(folder).name:11s}"):
-        particles = run_number(path)
-        if particles is None:
-            continue
-        data = read_gpu_util(path)
-        rows.append({"particles": particles,
-                     "gpu_sm": data["sm"].mean() if len(data) else np.nan,
-                     "gpu_mem": data["mem"].mean() if len(data) else np.nan,
-                     "gpu_samples": len(data)})
-    if not rows:
-        raise SystemExit(f"No GPU utilization logs in {folder}")
-    return pd.DataFrame(rows)
-
-
-def plot_gpu_util(series):
-    '''
-    @brief mean utilization of the GPU during the event loop against the
-           event size, one line per series: multiprocessors (left) and memory
-           (right)
-    @param series : dict label -> summary DataFrame with the gpu_* columns
-    @return the matplotlib figure
-    '''
-    fig, (ax_sm, ax_mem) = plt.subplots(1, 2, figsize=(11, 4.5), sharex=True)
-    for label, s in series.items():
-        ax_sm.plot(s["n_spacepoints"], s["gpu_sm"], marker="o", label=label)
-        ax_mem.plot(s["n_spacepoints"], s["gpu_mem"], marker="o", label=label)
-    for ax, what in ((ax_sm, "multiprocessors (sm)"), (ax_mem, "memory (mem)")):
-        ax.set_xscale("log")
-        ax.set_ylim(0, 100)
-        ax.set_xlabel("Spacepoints per event (median)")
-        ax.set_ylabel(f"Mean GPU utilization, {what} [%]")
-        ax.grid(True, which="both", alpha=0.3)
-    fig.suptitle("GPU utilization during the event loop (nvidia-smi dmon, 1 sample/s)")
-    fig.tight_layout()
-    # One legend for both panels, below them, so that it covers no line
-    handles, names = ax_sm.get_legend_handles_labels()
-    fig.legend(handles, names, loc="upper center", bbox_to_anchor=(0.5, 0.0),
-               ncol=min(len(names), 4), fontsize=9, frameon=False)
-    return fig
-
-
 def natural_key(path):
     '''
     @brief sorting key that compares the numbers in a name as numbers
@@ -316,24 +227,6 @@ def series_label(folder):
         n = int(match.group(1))
         return f"{n} thread" + ("s" if n > 1 else "")
     return folder.name
-
-
-def util_folder(folder):
-    '''
-    @brief folder of the nvidia-smi dmon logs that goes with a series: the
-           series itself in the layout of run_reco.sh (run_N/logs/gpu_util.log),
-           otherwise results/reco/gpu_util_tN for results/reco/threads_N
-    @param folder : Path of the series
-    @return Path of the logs, or None if there is none
-    '''
-    if any(folder.glob("run_*/logs/gpu_util.log")):
-        return folder
-    match = re.fullmatch(r"threads_(\d+)", folder.name)
-    if match:
-        candidate = folder.parent / f"gpu_util_t{match.group(1)}"
-        if candidate.is_dir():
-            return candidate
-    return None
 
 
 def plot_reco_time(ax, series):
@@ -482,10 +375,6 @@ if __name__ == "__main__":
     parser.add_argument("-l", "--labels", nargs="+",
                         help="legend label of every series (default: 'N threads' "
                              "for threads_N folders, otherwise the folder name)")
-    parser.add_argument("-u", "--util", nargs="+",
-                        help="folders with the nvidia-smi dmon logs, one per series and "
-                             "in the same order (default: the run_N/logs/gpu_util.log "
-                             "of the series, or gpu_util_tN next to threads_N)")
     parser.add_argument("-n", "--name", default=None,
                         help="name of the PDF (default: names of the series)")
     parser.add_argument("-o", "--output", default="results",
@@ -513,24 +402,7 @@ if __name__ == "__main__":
     series = {label: load_series(folder, backend)
               for label, (folder, backend) in zip(labels, pairs)}
 
-    # GPU utilization, matched to the runs by their number of particles (only
-    # for the series reconstructed on the GPU)
-    if args.util:
-        if len(args.util) != len(folders):
-            raise SystemExit("Give one folder of GPU logs per series")
-        logs = [Path(u) for u in args.util]
-    else:
-        logs = [util_folder(f) if b == "gpu" else None for f, b in pairs]
-    for label, folder in zip(labels, logs):
-        if folder is not None:
-            series[label] = series[label].merge(load_gpu_util(folder),
-                                                on="particles", how="left")
-
     figs = [plot_time_and_throughput(series), plot_breakdowns(series)]
-    with_util = {l: s for l, s in series.items()
-                 if "gpu_sm" in s and s["gpu_sm"].notna().any()}
-    if with_util:
-        figs.append(plot_gpu_util(with_util))
 
     # Default name: the folder given (results/reco -> reco.pdf), or the
     # labels of the series when several folders are given
