@@ -31,6 +31,7 @@
 #include <vecmem/memory/host_memory_resource.hpp>
 #include <vecmem/utils/cuda/async_copy.hpp>
 #include <vecmem/utils/cuda/stream_wrapper.hpp>
+#include <vecmem/memory/binary_page_memory_resource.hpp>
 
 /// Backend running the traccc CUDA algorithms. Every thread of reco.hpp
 /// creates its own instance, i.e. its own CUDA stream.
@@ -54,14 +55,16 @@ struct cuda_backend {
     traccc::cuda::stream_wrapper m_stream{m_vecmem_stream.stream()};
     vecmem::cuda::async_copy m_copy{m_stream.cudaStream()};
     vecmem::host_memory_resource m_host_mr;
-    vecmem::cuda::host_memory_resource m_pinned_mr;  // pinned host memory
+    vecmem::cuda::host_memory_resource m_pinned_mr; 
     vecmem::cuda::device_memory_resource m_device_mr;
-    traccc::memory_resource m_mr{m_device_mr, &m_pinned_mr};
+    vecmem::binary_page_memory_resource m_cached_pinned_mr{m_pinned_mr};
+    vecmem::binary_page_memory_resource m_cached_device_mr{m_device_mr};
+    traccc::memory_resource m_mr{m_cached_device_mr, &m_cached_pinned_mr};
 
     traccc::cuda::stream_wrapper& queue() { return m_stream; }
     vecmem::copy& copy() { return m_copy; }
     vecmem::memory_resource& host_mr() { return m_host_mr; }
-    vecmem::memory_resource& device_mr() { return m_device_mr; }
+    vecmem::memory_resource& device_mr() { return m_cached_device_mr; }
     traccc::memory_resource& mr() { return m_mr; }
     void synchronize() { m_stream.synchronize(); }
 
