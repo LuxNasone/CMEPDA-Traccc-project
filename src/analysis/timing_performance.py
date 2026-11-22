@@ -34,15 +34,15 @@ except ImportError:
 ## Reconstruction steps, in chain order, with their labels. File reading is
 ## kept apart: it is the same for every algorithm and depends on the disk.
 STEPS = {
-    #"t_h2d_ms": "H2D copy",
-    #"t_clusterization_ms": "Clusterization",
-    #"t_spacepoints_ms": "Spacepoint formation",
+    "t_h2d_ms": "H2D copy",
+    "t_clusterization_ms": "Clusterization",
+    "t_spacepoints_ms": "Spacepoint formation",
     "t_seeding_ms": "Seeding",
     "t_params_ms": "Track params",
     "t_finding_ms": "Track finding",
     "t_fitting_ms": "Track fitting",
-    #"t_d2h_ms": "D2H copy",
-    "t_hough_ms": "Hough transform",   # hough_reco: replaces seeding to fitting
+    "t_d2h_ms": "D2H copy",
+    "t_hough_ms": "Hough transform",  
 }
 
 
@@ -255,7 +255,7 @@ def plot_gpu_util(series):
     # One legend for both panels, below them, so that it covers no line
     handles, names = ax_sm.get_legend_handles_labels()
     fig.legend(handles, names, loc="upper center", bbox_to_anchor=(0.5, 0.0),
-               ncol=min(len(names), 6), fontsize=9, frameon=False)
+               ncol=min(len(names), 4), fontsize=9, frameon=False)
     return fig
 
 
@@ -458,7 +458,7 @@ def plot_time_and_throughput(series):
     fig.tight_layout()
     handles, names = ax_time.get_legend_handles_labels()
     fig.legend(handles, names, loc="upper center", bbox_to_anchor=(0.5, 0.0),
-               ncol=min(len(names), 6), fontsize=9, frameon=False)
+               ncol=min(len(names), 4), fontsize=9, frameon=False)
     return fig
 
 

@@ -198,7 +198,7 @@ def draw_event(hits, pt, radii, view):
     ax.set_title(f"Event {event}: {hits['particle_id'].nunique()} particles, "
                  f"{len(hits)} hits ({'transverse' if view == 'xy' else 'longitudinal'} view)")
     bar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, label="pT [GeV]")
-    # Plain numbers (0.5, 2, 6) instead of powers of ten on the log scale
+
     bar.ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%g"))
     bar.ax.yaxis.set_minor_formatter(ticker.FormatStrFormatter("%g"))
     fig.tight_layout()
@@ -238,7 +238,7 @@ def draw_layer_map(hits, modules, radius, index, n_events):
     '''
     layer = hits[hits["geometry_id"].isin(modules)]
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    _, _, _, image = ax.hist2d(layer["tz"], layer["phi"], bins=(200, 180),
+    _, _, _, image = ax.hist2d(layer["tz"], layer["phi"], bins=(200, 360),
                                cmap="viridis", cmin=1)
     ax.set_xlabel("z [mm]")
     ax.set_ylabel("phi [rad]")
