@@ -54,6 +54,17 @@ if(RECO_BUILD_GPU OR RECO_BUILD_CPU)
     find_package(traccc REQUIRED)
     find_package(detray REQUIRED)
 
+    # The libraries of traccc load others of the same installation (e.g.
+    # libtraccc_utils) that the programs do not link directly: put the lib
+    # folders of traccc and of Boost in the run path of the executables, so
+    # that they start without LD_LIBRARY_PATH
+    get_filename_component(traccc_lib_dir "${traccc_DIR}/../.." ABSOLUTE)
+    list(APPEND CMAKE_BUILD_RPATH "${traccc_lib_dir}")
+    if(Boost_DIR)
+        get_filename_component(boost_lib_dir "${Boost_DIR}/../.." ABSOLUTE)
+        list(APPEND CMAKE_BUILD_RPATH "${boost_lib_dir}")
+    endif()
+
     # Libraries used by both backends (the same as the traccc examples)
     set(traccc_common_libs
         vecmem::core
@@ -75,6 +86,9 @@ if(RECO_BUILD_GPU)
 endif()
 
 if(RECO_BUILD_CPU)
+    # The accelerator of Alpaka must be the one traccc was built with (the
+    # CPU one, alpaka_ACC_CPU_B_SEQ_T_THREADS_ENABLE): pass it with -D if
+    # find_package does not take it from the installed configuration
     find_package(alpaka REQUIRED)
     add_executable(traccc_reco_cpu traccc/reco_cpu.cpp)
     target_link_libraries(traccc_reco_cpu PRIVATE ${traccc_common_libs} traccc::alpaka)
