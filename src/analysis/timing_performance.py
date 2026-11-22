@@ -250,9 +250,12 @@ def plot_gpu_util(series):
         ax.set_xlabel("Spacepoints per event (median)")
         ax.set_ylabel(f"Mean GPU utilization, {what} [%]")
         ax.grid(True, which="both", alpha=0.3)
-    ax_sm.legend()
     fig.suptitle("GPU utilization during the event loop (nvidia-smi dmon, 1 sample/s)")
     fig.tight_layout()
+    # One legend for both panels, below them, so that it covers no line
+    handles, names = ax_sm.get_legend_handles_labels()
+    fig.legend(handles, names, loc="upper center", bbox_to_anchor=(0.5, 0.0),
+               ncol=min(len(names), 6), fontsize=9, frameon=False)
     return fig
 
 
@@ -333,14 +336,13 @@ def util_folder(folder):
     return None
 
 
-def plot_reco_time(series):
+def plot_reco_time(ax, series):
     '''
     @brief median reconstruction time per event against the event size, one
            line per series, with the 16-84% band of the events as error bars
+    @param ax : matplotlib axes to draw on
     @param series : dict label -> summary DataFrame
-    @return the matplotlib figure
     '''
-    fig, ax = plt.subplots(figsize=(7, 5))
     for label, s in series.items():
         err = [s["t_reco_ms"] - s["t_reco_lo_ms"], s["t_reco_hi_ms"] - s["t_reco_ms"]]
         ax.errorbar(s["n_spacepoints"], s["t_reco_ms"], yerr=err, marker="o",
@@ -349,24 +351,21 @@ def plot_reco_time(series):
     ax.set_yscale("log")
     ax.set_xlabel("Spacepoints per event (median)")
     ax.set_ylabel("Reconstruction time per event [ms]")
-    ax.set_title("Reconstruction time, file reading excluded")
+    ax.set_title("Time per event, file reading excluded")
     ax.grid(True, which="both", alpha=0.3)
-    ax.legend()
-    fig.tight_layout()
-    return fig
 
 
-def plot_breakdown(label, s):
+def plot_breakdown(ax, label, s):
     '''
     @brief share of every step in the time of one event, for every run of a
-           series: shows which step dominates as the events grow
-    @param label : name of the series
+           series, drawn on the given axes: shows which step dominates as the
+           events grow
+    @param ax : matplotlib axes to draw on
+    @param label : name of the series, used as title of the axes
     @param s : summary DataFrame of the series
-    @return the matplotlib figure
     '''
     steps = [c for c in STEPS if c in s.columns]
     x = np.arange(len(s))
-    fig, ax = plt.subplots(figsize=(7, 5))
     bottom = np.zeros(len(s))
     # File reading first, hatched: it is part of the event time but not of
     # the reconstruction.
@@ -374,35 +373,92 @@ def plot_breakdown(label, s):
            label="File reading")
     bottom += s["t_read_ms"].to_numpy()
     for step in steps:
-        ax.bar(x, s[step], bottom=bottom, label=STEPS[step])
+        # Same colour for a step in every panel, so that one legend is enough
+        ax.bar(x, s[step], bottom=bottom, color=STEP_COLOURS[step], label=STEPS[step])
         bottom += s[step].to_numpy()
-    ax.set_xticks(x, [f"{p}" if pd.notna(p) else r for p, r in zip(s["particles"], s["run"])])
+    ax.set_xticks(x, [f"{p}" if pd.notna(p) else r for p, r in zip(s["particles"], s["run"])],
+                  rotation=45, fontsize=8)
     ax.set_xlabel("Particles per event")
-    ax.set_ylabel("Median time per event [ms]")
-    ax.set_title(f"Time per step ({label})")
-    # Legend outside the axes, so that it never covers the bars
-    ax.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.01, 1))
-    fig.tight_layout()
+    ax.set_title(label)
+
+
+## Colour of every step, the same in all the panels of the breakdown
+STEP_COLOURS = {step: f"C{i}" for i, step in enumerate(STEPS)}
+
+
+def plot_breakdowns(series, ncols=4):
+    '''
+    @brief time per step of every series, one panel per series (ncols per
+           row), with a single legend and a common title
+    @param series : dict label -> summary DataFrame
+    @param ncols : (int) panels per row
+    @return the matplotlib figure
+    '''
+    n = len(series)
+    ncols = min(ncols, n)
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(3.6 * ncols, 3.4 * nrows),
+                             squeeze=False)
+    for ax, (label, s) in zip(axes.flat, series.items()):
+        plot_breakdown(ax, label, s)
+    for ax in axes.flat[n:]:
+        ax.set_visible(False)
+    for ax in axes[:, 0]:
+        ax.set_ylabel("Median time per event [ms]")
+
+    # One legend for all the panels, with every step found in at least one
+    handles = {}
+    for ax in axes.flat[:n]:
+        for h, l in zip(*ax.get_legend_handles_labels()):
+            handles.setdefault(l, h)
+    fig.suptitle("Time per step", fontsize=16, fontweight="bold")
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.legend(handles.values(), handles.keys(), loc="upper center",
+               bbox_to_anchor=(0.5, 0.0), ncol=min(len(handles), 6), fontsize=9,
+               frameon=False)
     return fig
 
 
-def plot_throughput(series):
+def plot_throughput(ax, series):
     '''
     @brief events per second against the event size, one line per series
-    @param series : dict label -> summary DataFrame (only those with throughput)
-    @return the matplotlib figure
+    @param ax : matplotlib axes to draw on
+    @param series : dict label -> summary DataFrame; the series without
+           throughput are skipped, but keep their colour
     '''
-    fig, ax = plt.subplots(figsize=(7, 5))
-    for label, s in series.items():
-        ax.plot(s["n_spacepoints"], s["events_per_s"], marker="o", label=label)
+    for i, (label, s) in enumerate(series.items()):
+        if "events_per_s" not in s or s["events_per_s"].isna().all():
+            continue
+        ax.plot(s["n_spacepoints"], s["events_per_s"], marker="o", color=f"C{i % 10}",
+                label=label)
     ax.set_xscale("log")
     ax.set_yscale("log")
     ax.set_xlabel("Spacepoints per event (median)")
     ax.set_ylabel("Throughput [events/s]")
-    ax.set_title("Throughput, file reading included")
+    ax.set_title("Events per second, file reading included")
     ax.grid(True, which="both", alpha=0.3)
-    ax.legend()
+
+
+def plot_time_and_throughput(series):
+    '''
+    @brief time per event (left) and events per second (right) side by side,
+           with one legend below them; without throughput only the time is drawn
+    @param series : dict label -> summary DataFrame
+    @return the matplotlib figure
+    '''
+    with_throughput = any("events_per_s" in s and s["events_per_s"].notna().any()
+                          for s in series.values())
+    if with_throughput:
+        fig, (ax_time, ax_rate) = plt.subplots(1, 2, figsize=(12, 4.8))
+        plot_throughput(ax_rate, series)
+    else:
+        fig, ax_time = plt.subplots(figsize=(7, 5))
+    plot_reco_time(ax_time, series)
+    fig.suptitle("Reconstruction time and throughput", fontsize=14, fontweight="bold")
     fig.tight_layout()
+    handles, names = ax_time.get_legend_handles_labels()
+    fig.legend(handles, names, loc="upper center", bbox_to_anchor=(0.5, 0.0),
+               ncol=min(len(names), 6), fontsize=9, frameon=False)
     return fig
 
 
@@ -470,12 +526,7 @@ if __name__ == "__main__":
             series[label] = series[label].merge(load_gpu_util(folder),
                                                 on="particles", how="left")
 
-    figs = [plot_reco_time(series)]
-    figs += [plot_breakdown(label, s) for label, s in series.items()]
-    with_throughput = {l: s for l, s in series.items()
-                       if "events_per_s" in s and s["events_per_s"].notna().any()}
-    if with_throughput:
-        figs.append(plot_throughput(with_throughput))
+    figs = [plot_time_and_throughput(series), plot_breakdowns(series)]
     with_util = {l: s for l, s in series.items()
                  if "gpu_sm" in s and s["gpu_sm"].notna().any()}
     if with_util:

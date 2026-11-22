@@ -13,16 +13,16 @@ The reconstructed tracks are compared with the truth of the simulation:
   4. a particle is reconstructable if it is charged, has pT above --min-pt and at
      least --min-hits true measurements; the efficiency is the fraction of them
      with at least one track.
-The track parameters are given on the surface of the first measurement of the
-track, so they are compared with the true hit on that surface.
+The track parameters (phi, theta, q/p, hence pT) are those of the fit on the
+surface of the first measurement of the track: phi and theta are the direction
+of the momentum where the track crosses that surface (the innermost hit), not
+at the vertex. They are compared with the true momentum of the simulated hit on
+the same surface.
 
 If the tracks file has the covariance of the parameters (columns cov_<a>_<b>,
-written by csv_writer.hpp), the errors of the fit are checked too:
-  - pulls of phi, theta, q/p and pT, (fit - true) / error, which must be
-    Gaussian with mean 0 and width 1 if the errors are right;
-  - their width against the true pT (multiple scattering grows at low pT);
-  - the chi2 of (phi, theta, q/p) with the full 3x3 covariance, which must
-    follow a chi2 with 3 degrees of freedom (flat p-value).
+written by csv_writer.hpp), the errors of the fit are checked with the pulls of
+phi, theta, q/p and pT, (fit - true) / error, which must be Gaussian with mean
+0 and width 1 if the errors are right.
 
 Input, one of:
   - a single run: its tracks folder (e.g. data/reco_gpu, right after the
@@ -36,7 +36,6 @@ Usage:
 '''
 
 import argparse
-import math
 import re
 from pathlib import Path
 
@@ -205,20 +204,20 @@ def add_residuals(tracks):
 
 
 ## Parameters of the pulls: column, axis label
-PULLS = (("pull_phi", "phi"), ("pull_theta", "theta"), ("pull_qop", "q/p"), ("pull_pt", "pT"))
+PULLS = (("pull_phi", r"$\phi$"), ("pull_theta", r"$\theta$"), ("pull_qop", r"$q/p$"),
+         ("pull_pt", r"$p_T$"))
 
-## Parameters of the chi2 test, in the order of the covariance columns
-CHI2_PARAMS = ("phi", "theta", "qop")
+## Covariance columns needed by the pulls (pT also needs theta - q/p)
+COV_COLUMNS = ("cov_phi_phi", "cov_theta_theta", "cov_qop_qop", "cov_theta_qop")
 
 
 def has_covariance(tracks):
     '''
     @brief tells whether the tracks have the covariance of the fit
     @param tracks : DataFrame of tracks
-    @return (bool) True if the columns of the (phi, theta, qop) block are there
+    @return (bool) True if the covariance columns used by the pulls are there
     '''
-    names = {f"cov_{a}_{b}" for i, a in enumerate(CHI2_PARAMS) for b in CHI2_PARAMS[i:]}
-    return names.issubset(tracks.columns)
+    return set(COV_COLUMNS).issubset(tracks.columns)
 
 
 def robust_width(values):
@@ -236,25 +235,13 @@ def robust_width(values):
     return 0.5 * (high - low)
 
 
-def chi2_3_sf(x):
-    '''
-    @brief survival function (p-value) of a chi2 with 3 degrees of freedom
-    @param x : array of chi2 values (>= 0)
-    @return array of p-values
-    '''
-    x = np.asarray(x, dtype=float)
-    erfc = np.vectorize(math.erfc, otypes=[float])
-    return erfc(np.sqrt(x / 2)) + np.sqrt(2 * x / np.pi) * np.exp(-x / 2)
-
-
 def add_pulls(t):
     '''
-    @brief pulls of the fitted parameters and chi2 of (phi, theta, q/p), from
-           the covariance of the fit
+    @brief pulls of the fitted parameters, from the covariance of the fit
     @param t : matched tracks with residuals (add_residuals) and the columns
            cov_<a>_<b>
-    @return t with pull_phi, pull_theta, pull_qop, pull_pt, chi2_3 and
-            chi2_3_pval; tracks with a non positive variance get NaN
+    @return t with pull_phi, pull_theta, pull_qop and pull_pt; tracks with a
+            non positive variance get NaN
     '''
     t = t.copy()
     p_true = np.sqrt(t["tpx"] ** 2 + t["tpy"] ** 2 + t["tpz"] ** 2)
@@ -277,25 +264,6 @@ def add_pulls(t):
     pt_reco = np.sin(t["theta"]) / abs_qop
     t["pull_pt"] = (pt_reco - t["pt_hit"]) / np.sqrt(var_pt.where(var_pt > 0))
 
-    # chi2 = r^T C^-1 r with the 3x3 covariance of (phi, theta, q/p)
-    n = len(t)
-    cov = np.empty((n, 3, 3))
-    for i, a in enumerate(CHI2_PARAMS):
-        for j, b in enumerate(CHI2_PARAMS):
-            name = f"cov_{a}_{b}" if i <= j else f"cov_{b}_{a}"
-            cov[:, i, j] = t[name].to_numpy(dtype=float)
-    res = t[["res_phi", "res_theta", "res_qop"]].to_numpy(dtype=float)
-    chi2 = np.full(n, np.nan)
-    good = np.isfinite(cov).all(axis=(1, 2)) & np.isfinite(res).all(axis=1)
-    if good.any():
-        # Only positive definite matrices: the others come from failed fits
-        positive = np.zeros(n, dtype=bool)
-        positive[good] = np.linalg.eigvalsh(cov[good]).min(axis=1) > 0
-        if positive.any():
-            solved = np.linalg.solve(cov[positive], res[positive][..., None])[..., 0]
-            chi2[positive] = np.einsum("ij,ij->i", res[positive], solved)
-    t["chi2_3"] = chi2
-    t["chi2_3_pval"] = np.where(np.isfinite(chi2), chi2_3_sf(np.nan_to_num(chi2)), np.nan)
     return t
 
 
@@ -328,6 +296,13 @@ def summarize(tracks, particles):
     rec = particles[particles["reconstructable"]]
     n_rec, n_found = len(rec), int(rec["found"].sum())
     n_tracks = len(tracks)
+    n_events = particles["event"].nunique() if "event" in particles else 1
+    # fit_outcome = 1 is traccc's track_fit_outcome::SUCCESS; a file without
+    # the column (e.g. the Hough tracks) counts every track as fitted
+    if "fit_outcome" in tracks:
+        n_fit_ok = int((tracks["fit_outcome"] == 1).sum())
+    else:
+        n_fit_ok = n_tracks
 
     def rate(k, n):
         return (k / n, np.sqrt(k / n * (1 - k / n) / n)) if n else (np.nan, np.nan)
@@ -335,7 +310,13 @@ def summarize(tracks, particles):
     eff, eff_err = rate(n_found, n_rec)
     fake, fake_err = rate(int((tracks["category"] == "fake").sum()), n_tracks)
     dup, dup_err = rate(int((tracks["category"] == "duplicate").sum()), n_tracks)
-    return {"reconstructable": n_rec, "found": n_found, "tracks": n_tracks,
+    return {"events": n_events, "particles_total": len(particles),
+            "charged": int((particles["q"] != 0).sum()) if "q" in particles else len(particles),
+            "true_measurements": (int(particles["n_true_meas"].sum())
+                                  if "n_true_meas" in particles else 0),
+            "reco_measurements": int(tracks["n_meas"].sum()),
+            "fit_success": n_fit_ok, "fit_failed": n_tracks - n_fit_ok,
+            "reconstructable": n_rec, "found": n_found, "tracks": n_tracks,
             "efficiency": eff, "efficiency_err": eff_err,
             "fake_rate": fake, "fake_rate_err": fake_err,
             "duplicate_rate": dup, "duplicate_rate_err": dup_err,
@@ -345,6 +326,29 @@ def summarize(tracks, particles):
             "measurement_match_fraction": (tracks["n_meas_matched"].sum() / tracks["n_meas"].sum()
                                            if tracks["n_meas"].sum() > 0 else np.nan),
             "mean_purity": tracks.loc[tracks["matched"], "purity"].mean()}
+
+
+def legend_text(label, stats=""):
+    '''
+    @brief legend entry of a run: its name and its statistics; with a single run
+           the name is empty (it is in the table of the first page) and only the
+           statistics are left
+    @param label : (str) name of the run, empty for a single run
+    @param stats : (str) statistics of the run, e.g. "RMS 0.01"
+    @return (str) the legend entry, or None for no entry
+    '''
+    text = ": ".join(part for part in (label, stats) if part)
+    return text or None
+
+
+def finish_legend(ax, fontsize=7):
+    '''
+    @brief draws the legend only if some line has an entry
+    @param ax : matplotlib axes
+    @param fontsize : font size of the legend
+    '''
+    if ax.get_legend_handles_labels()[1]:
+        ax.legend(fontsize=fontsize)
 
 
 def binned_efficiency(particles, column, edges):
@@ -378,20 +382,18 @@ def plot_rates(summary):
 
     if len(summary) == 1:
         # One run: the three rates side by side, with their values
+        # The names are on the x axis: one colour and no legend
         row = summary.iloc[0]
         x = np.arange(len(rates))
-        for i, (col, label) in enumerate(rates):
-            ax.stem([x[i]], [row[col]], linefmt=f"C{i}-", markerfmt=f"C{i}o",
-                    basefmt=" ", label=label)
+        for i, (col, _) in enumerate(rates):
+            ax.stem([x[i]], [row[col]], linefmt="C0-", markerfmt="C0o", basefmt=" ")
             ax.errorbar([x[i]], [row[col]], yerr=[row[f"{col}_err"]], fmt="none",
-                        ecolor=f"C{i}", capsize=4)
+                        ecolor="C0", capsize=4)
             ax.annotate(f"{row[col]:.3f}", (x[i], row[col]), textcoords="offset points",
                         xytext=(8, 4), fontsize=9)
         ax.set_xticks(x, [label for _, label in rates])
         ax.set_xlim(-0.6, len(rates) - 0.4)
-        ax.set_title(f"Tracking performance, {row['run']} "
-                     f"({int(row['reconstructable'])} reconstructable particles, "
-                     f"{int(row['tracks'])} tracks)", fontsize=10)
+        ax.set_title("Tracking performance")
     else:
         # Several runs: stems against the particles per event, the three rates
         # slightly shifted (on the log axis) so that they do not overlap
@@ -413,39 +415,150 @@ def plot_rates(summary):
 
     ax.set_ylim(0, 1.05)
     ax.set_ylabel("Rate")
-    ax.legend(fontsize=8)
+    if len(summary) > 1:
+        # Several runs: the colours tell the rates apart
+        ax.legend(fontsize=8)
     fig.tight_layout()
     return fig
 
 
-def plot_binned(runs, column, edges, xlabel, log_x=False):
+## Rows of the table of the first page: summary column, row name, format.
+## A format "rate" prints the value with its binomial error
+TABLE_ROWS = (("events", "Events", "d"),
+              ("particles", "Particles per event (simulated)", "d"),
+              ("true_measurements", "True measurements", "d"),
+              ("tracks", "Reconstructed tracks", "d"),
+              ("reco_measurements", "Measurements on the tracks", "d"),
+              ("mean_measurements", "Measurements per track", ".2f"),
+              ("fit_success", "Successful fits", "d"),
+              ("fit_failed", "Failed fits", "d"),
+              ("mean_purity", "Mean purity of the matched tracks", ".3f"),
+              ("measurement_match_fraction", "Measurements matched to the truth", ".3f"))
+
+
+def table_cell(row, column, fmt):
     '''
-    @brief efficiency against a particle variable, one line per run
+    @brief text of one cell of the summary table
+    @param row : one row of the summary (a run)
+    @param column : (str) summary column
+    @param fmt : (str) format, or "rate" for value +- error
+    @return (str) the text, "-" if the value is missing
+    '''
+    value = row.get(column, np.nan)
+    if value is None or (isinstance(value, float) and not np.isfinite(value)):
+        return "-"
+    if fmt == "rate":
+        return rf"{value:.3f} $\pm$ {row[column + '_err']:.3f}"
+    if fmt == "d":
+        return f"{int(value):d}"
+    return format(value, fmt)
+
+
+def plot_summary_table(summary, args):
+    '''
+    @brief first page: the characteristics of every run (particles, measurements,
+           tracks, fits) and its rates, one column per run, with the cuts of the
+           analysis below
+    @param summary : DataFrame, one row per run
+    @param args : command line options (tolerance_mm, min_fraction, min_pt, min_hits)
+    @return the matplotlib figure
+    '''
+    single_series = summary["series"].nunique() == 1
+    headers = [r["run"] if single_series else f"{r['series']}\n{r['run']}"
+               for _, r in summary.iterrows()]
+    cells = [[table_cell(r, column, fmt) for _, r in summary.iterrows()]
+             for column, _, fmt in TABLE_ROWS]
+    names = [name for _, name, _ in TABLE_ROWS]
+
+    width = 4.5 + 1.6 * len(headers)
+    fig, ax = plt.subplots(figsize=(max(width, 7), 0.3 * len(TABLE_ROWS) + 1.0))
+    ax.axis("off")
+    table = ax.table(cellText=cells, rowLabels=names, colLabels=headers,
+                     cellLoc="center", rowLoc="left", loc="center")
+    table.auto_set_font_size(False)
+    table.set_fontsize(9)
+    table.scale(1, 1.35)
+    for (i, j), cell in table.get_celld().items():
+        cell.set_edgecolor("0.75")
+        if i == 0 or j == -1:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("0.93")
+    title = "Reconstructed runs"
+    if single_series:
+        title += f" ({summary['series'].iloc[0]})"
+    ax.set_title(title, fontsize=12, pad=12)
+    cuts = (rf"Matching: tolerance {args.tolerance_mm:g} mm, track matched with "
+            rf"$\geq${args.min_fraction:.0%} of its measurements from one particle.  "
+            "\n" rf"Reconstructable: charged, $p_T > {args.min_pt:g}$ GeV, "
+            rf"$\geq${args.min_hits} true measurements.  "
+            "Successful fit: fit_outcome = 1 (traccc SUCCESS).")
+    ax.text(0.5, -0.02, cuts, transform=ax.transAxes, ha="center", va="top",
+            fontsize=8, color="0.3")
+    return fig
+
+
+def zoomed_limits(low, high, min_span=0.04, max_value=1.0):
+    '''
+    @brief y range of an efficiency plot around its points: the efficiency is
+           expected flat, so the full 0-1 range would hide its variations
+    @param low, high : lowest and highest point (with its error) of every run
+    @param min_span : (float) smallest range shown
+    @param max_value : (float) highest value shown, plus a margin
+    @return (bottom, top) of the y axis
+    '''
+    low = np.nanmin(low) if np.isfinite(low).any() else 0.0
+    high = np.nanmax(high) if np.isfinite(high).any() else 1.0
+    margin = 0.15 * max(high - low, min_span)
+    top = min(high + margin, max_value + 0.2 * margin)
+    bottom = max(min(low - margin, top - min_span), 0.0)
+    return bottom, top
+
+
+def plot_binned(runs, column, edges, xlabel, name, log_x=False):
+    '''
+    @brief efficiency against a particle variable, one line per run, with the
+           integrated efficiency of the run as a dashed line; the y axis is
+           zoomed around the points
     @param runs : list of (label, particles) pairs
     @param column, edges, xlabel : variable, bins and axis label
+    @param name : (str) name of the variable in the title, e.g. r"$\\eta$"
     @param log_x : logarithmic x axis
     @return the matplotlib figure
     '''
     fig, ax = plt.subplots(figsize=(7, 5))
+    low, high = [], []
     for label, particles in runs:
         x, eff, err = binned_efficiency(particles, column, edges)
-        ax.errorbar(x, eff, yerr=err, marker="o", ms=3, capsize=2, label=label)
+        bars = ax.errorbar(x, eff, yerr=err, marker="o", ms=3, capsize=2,
+                           label=legend_text(label))
+        # Integrated efficiency of the run, as a reference for the bins
+        rec = particles[particles["reconstructable"]]
+        if len(rec):
+            ax.axhline(rec["found"].mean(), color=bars[0].get_color(), lw=0.8, ls="--",
+                       label=legend_text(label, f"integrated {rec['found'].mean():.3f}"))
+        good = np.isfinite(eff)
+        low.append(np.min((eff - err)[good]) if good.any() else np.nan)
+        high.append(np.max((eff + err)[good]) if good.any() else np.nan)
     if log_x:
         ax.set_xscale("log")
-    ax.set_ylim(0, 1.05)
+    ax.set_ylim(*zoomed_limits(low, high))
     ax.set_xlabel(xlabel)
     ax.set_ylabel("Efficiency")
-    ax.set_title(f"Efficiency against {xlabel.split(' [')[0]}")
+    ax.set_title(f"Efficiency against {name}")
     ax.grid(True, which="both", alpha=0.3)
-    ax.legend(fontsize=7)
+    finish_legend(ax)
     fig.tight_layout()
     return fig
 
 
 ## Residuals of the fitted parameters: column, axis label, title
-RESIDUALS = (("rel_pt", "(pT reco - pT true) / pT true", "Relative pT resolution"),
-             ("res_phi", "phi reco - phi true [rad]", "phi resolution"),
-             ("res_theta", "theta reco - theta true [rad]", "theta resolution"))
+RESIDUALS = (("rel_pt",
+              r"$(p_T^{\mathrm{reco}} - p_T^{\mathrm{true}})\,/\,p_T^{\mathrm{true}}$",
+              r"Relative $p_T$ resolution"),
+             ("res_phi", r"$\phi_{\mathrm{reco}} - \phi_{\mathrm{true}}$ [rad]",
+              r"$\phi$ resolution"),
+             ("res_theta", r"$\theta_{\mathrm{reco}} - \theta_{\mathrm{true}}$ [rad]",
+              r"$\theta$ resolution"))
 
 
 def plot_residual(runs, column, xlabel, title):
@@ -460,8 +573,7 @@ def plot_residual(runs, column, xlabel, title):
     values = pd.concat([t[column] for _, t in runs]).dropna()
     if values.empty:
         return None
-    # Range from the central 98% of all the runs, so that the outliers do not
-    # squeeze the peak; the RMS is computed in the same range
+
     low, high = np.percentile(values, [1, 99])
     edges = np.linspace(low, high, 61)
     fig, ax = plt.subplots(figsize=(7, 5))
@@ -470,41 +582,56 @@ def plot_residual(runs, column, xlabel, title):
         inside = v[(v >= low) & (v <= high)]
         rms = np.sqrt(np.mean(inside ** 2)) if len(inside) else np.nan
         ax.hist(v, bins=edges, histtype="step", linewidth=1.5, density=True,
-                label=f"{label}: RMS {rms:.3g}, {len(v)} tracks")
+                label=legend_text(label, f"RMS {rms:.3g}, {len(v)} tracks"))
     ax.axvline(0, color="grey", lw=0.8, ls="--")
     ax.set_xlabel(xlabel)
     ax.set_ylabel("normalized tracks")
     ax.set_title(f"{title} (matched tracks)")
-    ax.legend(fontsize=7)
+    finish_legend(ax)
     fig.tight_layout()
     return fig
 
 
-def plot_fit_quality(runs):
+def plot_pvalue(runs):
     '''
-    @brief p-value of the fit (flat for a correct fit) and measurements per track
+    @brief p-value of the fit, flat for a correct fit
+    @param runs : list of (label, tracks) pairs
+    @return the matplotlib figure, or None if no track has a p-value (e.g. the
+            Hough fit, ndf = 0)
+    '''
+    good_runs = [(label, t[(t["ndf"] > 0) & t["pval"].notna()]) for label, t in runs]
+    good_runs = [(label, t) for label, t in good_runs if len(t)]
+    if not good_runs:
+        return None
+    fig, ax = plt.subplots(figsize=(7, 5))
+    for label, t in good_runs:
+        ax.hist(t["pval"], bins=np.linspace(0, 1, 21), histtype="step", linewidth=1.5,
+                density=True, label=legend_text(label))
+    ax.axhline(1, color="grey", lw=0.8, ls="--")
+    ax.set_xlabel("fit p-value")
+    ax.set_ylabel("normalized tracks")
+    ax.set_title("Fit p-value (flat for a correct fit)")
+    finish_legend(ax)
+    fig.tight_layout()
+    return fig
+
+
+def plot_track_length(runs):
+    '''
+    @brief measurements per track
     @param runs : list of (label, tracks) pairs
     @return the matplotlib figure
     '''
-    fig, (ax_p, ax_n) = plt.subplots(1, 2, figsize=(12, 4.5))
+    fig, ax = plt.subplots(figsize=(7, 5))
     for label, t in runs:
-        good = t[(t["ndf"] > 0) & t["pval"].notna()]
-        # Tracks without a p-value (e.g. the Hough fit, ndf = 0) are not drawn
-        if len(good):
-            ax_p.hist(good["pval"], bins=np.linspace(0, 1, 21), histtype="step",
-                      density=True, label=label)
         n = t["n_meas"].dropna().astype(int)
         if len(n):
-            ax_n.hist(n, bins=np.arange(n.min(), n.max() + 2) - 0.5, histtype="step",
-                      density=True, label=label)
-    ax_p.set_xlabel("fit p-value")
-    ax_p.set_ylabel("normalized tracks")
-    ax_p.set_title("Fit p-value (flat for a correct fit)")
-    ax_n.set_xlabel("measurements per track")
-    ax_n.set_ylabel("normalized tracks")
-    ax_n.set_title("Track length")
-    for ax in (ax_p, ax_n):
-        ax.legend(fontsize=6)
+            ax.hist(n, bins=np.arange(n.min(), n.max() + 2) - 0.5, histtype="step",
+                    linewidth=1.5, density=True, label=legend_text(label))
+    ax.set_xlabel("measurements per track")
+    ax.set_ylabel("normalized tracks")
+    ax.set_title("Track length")
+    finish_legend(ax)
     fig.tight_layout()
     return fig
 
@@ -525,72 +652,15 @@ def plot_pulls(runs):
             if v.empty:
                 continue
             ax.hist(v, bins=edges, histtype="step", linewidth=1.5, density=True,
-                    label=f"{label}: mean {v.median():.2f}, width {robust_width(v):.2f}")
+                    label=legend_text(label, f"median {v.median():.2f}, "
+                                                     f"width {robust_width(v):.2f}"))
         ax.plot(x, np.exp(-x ** 2 / 2) / np.sqrt(2 * np.pi), "k--", lw=0.8,
-                label="N(0, 1)")
-        ax.set_xlabel(f"pull of {name} = (fit - true) / error")
+                label=r"$\mathcal{N}(0,1)$")
+        ax.set_xlabel(rf"pull of {name} = (fit $-$ true) / $\sigma$")
         ax.set_ylabel("normalized tracks")
         ax.legend(fontsize=6)
     fig.suptitle("Pulls of the fitted parameters (matched tracks); "
                  "median and half of the 16-84% interval in the legend")
-    fig.tight_layout()
-    return fig
-
-
-def plot_pull_width(runs, edges):
-    '''
-    @brief width of the pulls against the true pT: 1 if the errors are right,
-           a trend with pT points to multiple scattering or energy loss
-    @param runs : list of (label, tracks with pulls) pairs
-    @param edges : pT bin edges in GeV
-    @return the matplotlib figure
-    '''
-    fig, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True)
-    centres = np.sqrt(edges[1:] * edges[:-1])
-    for ax, (column, name) in zip(axes.flat, PULLS):
-        for label, t in runs:
-            bins = pd.cut(t["pt_hit"], edges)
-            width = t.groupby(bins, observed=False)[column].agg(robust_width)
-            ax.plot(centres, width.to_numpy(), marker="o", ms=3, label=label)
-        ax.axhline(1, color="grey", lw=0.8, ls="--")
-        ax.set_xscale("log")
-        ax.set_xlabel("true pT [GeV]")
-        ax.set_ylabel(f"width of the pull of {name}")
-        ax.grid(True, which="both", alpha=0.3)
-        ax.legend(fontsize=6)
-    fig.suptitle("Width of the pulls against pT (1 = correct errors)")
-    fig.tight_layout()
-    return fig
-
-
-def plot_chi2_3(runs):
-    '''
-    @brief chi2 of (phi, theta, q/p) against the truth with the 3x3 covariance:
-           it follows a chi2 with 3 degrees of freedom, and its p-value is flat,
-           if the covariance (correlations included) is right
-    @param runs : list of (label, tracks with chi2_3) pairs
-    @return the matplotlib figure
-    '''
-    fig, (ax_c, ax_p) = plt.subplots(1, 2, figsize=(12, 4.5))
-    edges = np.linspace(0, 15, 61)
-    x = np.linspace(1e-3, 15, 300)
-    for label, t in runs:
-        chi2 = t["chi2_3"].dropna()
-        if chi2.empty:
-            continue
-        ax_c.hist(chi2.clip(upper=edges[-1]), bins=edges, histtype="step", density=True,
-                  label=f"{label}: mean {chi2.mean():.2f} (3 expected)")
-        ax_p.hist(t["chi2_3_pval"].dropna(), bins=np.linspace(0, 1, 21), histtype="step",
-                  density=True, label=label)
-    ax_c.plot(x, np.sqrt(x) * np.exp(-x / 2) / np.sqrt(2 * np.pi), "k--", lw=0.8,
-              label="chi2, 3 d.o.f.")
-    ax_p.axhline(1, color="k", ls="--", lw=0.8, label="flat")
-    ax_c.set_xlabel("chi2 of (phi, theta, q/p) against the truth (last bin: overflow)")
-    ax_p.set_xlabel("p-value of that chi2")
-    for ax in (ax_c, ax_p):
-        ax.set_ylabel("normalized tracks")
-        ax.legend(fontsize=6)
-    fig.suptitle("Covariance of the fit against the truth (matched tracks)")
     fig.tight_layout()
     return fig
 
@@ -661,7 +731,14 @@ def main():
     rows, eff_runs, res_runs, fit_runs = [], [], [], []
     for series, run, n, tracks_folder, truth in runs:
         tracks, particles = analyse_run(tracks_folder, truth, args)
-        label = f"{run}" if len({r[0] for r in runs}) == 1 else f"{series} {run}"
+        # The run names are in the table of the first page: a single run needs
+        # no name in the legends
+        if len(runs) == 1:
+            label = ""
+        elif len({r[0] for r in runs}) == 1:
+            label = run
+        else:
+            label = f"{series} {run}"
         rows.append({"series": series, "run": run, "particles": n,
                      **summarize(tracks, particles)})
         eff_runs.append((label, particles))
@@ -674,25 +751,28 @@ def main():
     summary = pd.DataFrame(rows)
     pt_edges = np.geomspace(0.1, 100, 31)
     eta_edges = np.linspace(-4, 4, 33)
-    figs = [plot_rates(summary),
-            plot_binned(eff_runs, "pt", pt_edges, "pT [GeV]", log_x=True),
-            plot_binned(eff_runs, "eta", eta_edges, "eta")]
+    figs = [plot_summary_table(summary, args),
+            plot_rates(summary),
+            plot_binned(eff_runs, "pt", pt_edges, r"$p_T$ [GeV]", r"$p_T$", log_x=True),
+            plot_binned(eff_runs, "eta", eta_edges, r"$\eta$", r"$\eta$")]
     # One page per residual
     for column, xlabel, title in RESIDUALS:
         fig = plot_residual(res_runs, column, xlabel, title)
         if fig is not None:
             figs.append(fig)
-    figs.append(plot_fit_quality(fit_runs))
+    fig = plot_pvalue(fit_runs)
+    if fig is not None:
+        figs.append(fig)
+    figs.append(plot_track_length(fit_runs))
 
     # Errors of the fit, for the runs with the covariance in their tracks file
     pull_runs = [(label, t) for label, t in res_runs if "pull_phi" in t]
     if pull_runs:
-        figs += [plot_pulls(pull_runs), plot_pull_width(pull_runs, pt_edges),
-                 plot_chi2_3(pull_runs)]
+        figs.append(plot_pulls(pull_runs))
         for label, t in pull_runs:
-            widths = ", ".join(f"{name} {robust_width(t[col]):.2f}" for col, name in PULLS)
-            print(f"{label}: width of the pulls: {widths}; "
-                  f"mean chi2(phi, theta, q/p) {t['chi2_3'].mean():.2f} (3 expected)")
+            widths = ", ".join(f"{col[5:]} {robust_width(t[col]):.2f}" for col, _ in PULLS)
+            print(f"{label or runs[0][1]}: width of the pulls "
+                  f"(1 if the errors are right): {widths}")
     else:
         print("No covariance in the tracks files: the pulls are not drawn")
 
