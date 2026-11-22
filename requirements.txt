@@ -19,5 +19,5 @@ uproot==5.7.7
 vector==1.9.0
 xxhash==4.0.2
 tqdm
-uncertianties
+uncertainties
 
