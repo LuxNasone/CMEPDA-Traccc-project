@@ -33,7 +33,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "../utils.hpp"
+#include "../reconstruction/utils.hpp"
 
 namespace hough {
 

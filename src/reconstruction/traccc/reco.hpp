@@ -15,7 +15,7 @@
 #pragma once
 
 // Project include(s).
-#include "csv_writer.hpp"
+#include "../reconstruction/csv_writer.hpp"
 
 // reco.hpp is included before the backend headers, so every traccc type used
 // by the template must be declared here (non-dependent names are looked up
@@ -79,7 +79,7 @@
 #include <utility>
 #include <vector>
 
-#include "../utils.hpp"
+#include "../reconstruction/utils.hpp"
 
 // Output folder for the CSV files, set by CMake (see CMakeLists.txt).
 #ifndef RECO_DATA_DIR

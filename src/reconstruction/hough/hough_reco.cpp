@@ -21,7 +21,7 @@
  */
 
 // Project include(s).
-#include "../utils.hpp"
+#include "../reconstruction/utils.hpp"
 #include "hough.hpp"
 
 // System include(s).

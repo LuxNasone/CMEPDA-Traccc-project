@@ -34,7 +34,7 @@
 
 #include <boost/filesystem.hpp>
 
-#include "../utils.hpp"
+#include "../reconstruction/utils.hpp"
 
 using namespace traccc;
 
