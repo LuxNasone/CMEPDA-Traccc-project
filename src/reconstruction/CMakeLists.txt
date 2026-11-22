@@ -41,6 +41,11 @@ set(RECO_DATA_DIR "${default_data_dir}" CACHE PATH
 function(reco_setup target)
     target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_definitions(${target} PRIVATE RECO_DATA_DIR="${RECO_DATA_DIR}")
+    # Old-style RPATH instead of RUNPATH: a RUNPATH is used only for the
+    # libraries the executable links directly, while the libraries of traccc
+    # load others of the same installation (libtraccc_utils, libActsCore...)
+    # that must be found through the run path of the executable too
+    target_link_options(${target} PRIVATE "LINKER:--disable-new-dtags")
 endfunction()
 
 # --- Hough transform: plain C++, multi-threaded --------------------------------
