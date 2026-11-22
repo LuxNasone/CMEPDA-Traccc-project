@@ -21,3 +21,5 @@ Exam_2/
 *.so.*
 wget-log*
 !config/*.json
+traccc-install/
+reco-build/
