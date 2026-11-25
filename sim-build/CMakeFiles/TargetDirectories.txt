@@ -1,3 +1,0 @@
-/home/local/ADUNIPI/l.nasone/Exam_2/sim-build/CMakeFiles/traccc_toy_mc.dir
-/home/local/ADUNIPI/l.nasone/Exam_2/sim-build/CMakeFiles/edit_cache.dir
-/home/local/ADUNIPI/l.nasone/Exam_2/sim-build/CMakeFiles/rebuild_cache.dir
