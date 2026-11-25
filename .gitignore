@@ -26,3 +26,11 @@ wget-log*
 traccc-install/
 reco-build/
 traccc_before_cmake_split.patch
+sim-build/
+build/
+acts/
+venv/
+results/
+data/
+logs/
+*.log
