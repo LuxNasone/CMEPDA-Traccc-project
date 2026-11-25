@@ -19,10 +19,21 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
-find_package(traccc REQUIRED)
-find_package(detray REQUIRED)
-find_package(covfie REQUIRED)
-find_package(Boost REQUIRED COMPONENTS filesystem)
+# Found only once per build: in the build of the whole project
+# (src/CMakeLists.txt) they are already found at the top, and finding ACTS
+# twice fails (it creates the Eigen3::Eigen target again)
+if(NOT TARGET traccc::core)
+    find_package(traccc REQUIRED)
+endif()
+if(NOT TARGET detray::core)
+    find_package(detray REQUIRED)
+endif()
+if(NOT TARGET covfie::core)
+    find_package(covfie REQUIRED)
+endif()
+if(NOT TARGET Boost::filesystem)
+    find_package(Boost REQUIRED COMPONENTS filesystem)
+endif()
 
 # Run path with the lib folders of traccc and Boost, also for the libraries
 # that traccc loads indirectly (see src/reconstruction/CMakeLists.txt)
@@ -45,4 +56,3 @@ target_link_libraries(traccc_toy_mc PRIVATE
     covfie::core
     Boost::filesystem)
 target_link_options(traccc_toy_mc PRIVATE "LINKER:--disable-new-dtags")
-

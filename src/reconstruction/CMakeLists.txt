@@ -56,8 +56,15 @@ reco_setup(traccc_hough_reco)
 
 # --- traccc reconstruction -----------------------------------------------------
 if(RECO_BUILD_GPU OR RECO_BUILD_CPU)
-    find_package(traccc REQUIRED)
-    find_package(detray REQUIRED)
+    # Found only once per build: in the build of the whole project
+    # (src/CMakeLists.txt) they are already found at the top, and finding
+    # ACTS twice fails (it creates the Eigen3::Eigen target again)
+    if(NOT TARGET traccc::core)
+        find_package(traccc REQUIRED)
+    endif()
+    if(NOT TARGET detray::core)
+        find_package(detray REQUIRED)
+    endif()
 
     # The libraries of traccc load others of the same installation (e.g.
     # libtraccc_utils) that the programs do not link directly: put the lib
@@ -94,7 +101,9 @@ if(RECO_BUILD_CPU)
     # The accelerator of Alpaka must be the one traccc was built with (the
     # CPU one, alpaka_ACC_CPU_B_SEQ_T_THREADS_ENABLE): pass it with -D if
     # find_package does not take it from the installed configuration
-    find_package(alpaka REQUIRED)
+    if(NOT TARGET alpaka::alpaka)
+        find_package(alpaka REQUIRED)
+    endif()
     add_executable(traccc_reco_cpu traccc/reco_cpu.cpp)
     target_link_libraries(traccc_reco_cpu PRIVATE ${traccc_common_libs} traccc::alpaka)
     reco_setup(traccc_reco_cpu)

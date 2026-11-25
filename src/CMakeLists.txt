@@ -18,5 +18,13 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# The external packages are found once, here: their targets are then seen by
+# both subfolders. Finding traccc (and so ACTS) again in a second subfolder
+# fails, because ACTS would create the Eigen3::Eigen target twice
+find_package(traccc REQUIRED)
+find_package(detray REQUIRED)
+find_package(covfie REQUIRED)
+find_package(Boost REQUIRED COMPONENTS filesystem)
+
 add_subdirectory(simulation)
 add_subdirectory(reconstruction)
