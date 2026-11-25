@@ -25,7 +25,7 @@
 #include "traccc/options/track_propagation.hpp"
 #include "traccc/simulation/event_generators.hpp"
 #include "traccc/simulation/measurement_smearer.hpp"
-#include "traccc/simulation/simulator.hpp"
+#include "seeded_simulator.hpp"
 #include "traccc/simulation/smearing_writer.hpp"
 
 #include <detray/test/common/build_toy_detector.hpp>
@@ -175,7 +175,7 @@ int simulate(const toy_config& cfg,
   boost::filesystem::create_directories(full_path);
 
   auto sim =
-      traccc::simulator<detector_type, b_field_t, generator_type, writer_type>(
+      traccc::seeded_simulator<detector_type, b_field_t, generator_type, writer_type>(
           generation_opts.ptc_type, generation_opts.events, det, field,
           std::move(generator), std::move(smearer_writer_cfg), full_path);
   sim.get_config().propagation = propagation_opts;

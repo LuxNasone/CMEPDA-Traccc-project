@@ -1,5 +1,6 @@
 acts/
 traccc-build/
+reco-build/
 detray-build/
 docs/doxygen/
 build/
@@ -7,6 +8,7 @@ data/
 venv/
 logs/
 results/
+sim-build/
 __pycache__/
 .pytest_cache/
 .vscode/
