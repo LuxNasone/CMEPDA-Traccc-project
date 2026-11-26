@@ -181,3 +181,29 @@ def test_load_series_hough(reco_tree):
     assert s["t_hough_ms"].tolist() == pytest.approx([3.0, 3.0])
     # 4 events (warm-up removed) from t = 5 to t = 24.5 ms
     assert s["events_per_s"].tolist() == pytest.approx([1000. * 4 / 19.5] * 2)
+
+
+# --- other sizes of the event -----------------------------------------------------
+
+def test_sizes_only_for_traccc(tmp_path):
+    '''
+    @brief measurements, seeds and found tracks are summarized when the file
+           has them (traccc), and their plots are skipped when no series has
+           them (Hough)
+    '''
+    path = tmp_path / "run_10" / "logs" / "gpu_performance.csv"
+    path.parent.mkdir(parents=True)
+    rows = [{"event": e, "n_spacepoints": 50, "n_measurements": 60, "n_seeds": 7 + e,
+             "n_found_tracks": 3, "t_read_ms": 1.0, "t_seeding_ms": 1.0}
+            for e in range(5)]
+    pd.DataFrame(rows).to_csv(path, index=False)
+    row = perf.summarize(path)
+    assert row["n_seeds"] == pytest.approx(9.5)   # median of 8..11 (warm-up removed)
+    assert row["n_measurements"] == 60 and row["n_found_tracks"] == 3
+
+    hough = pd.DataFrame({"n_spacepoints": [50.0], "t_reco_ms": [1.0],
+                          "t_reco_lo_ms": [1.0], "t_reco_hi_ms": [1.0]})
+    for column in perf.SIZE_VARIABLES:
+        assert perf.plot_time_vs({"hough": hough}, column) is None
+        traccc = hough.assign(**{column: [9.5]})
+        assert perf.plot_time_vs({"gpu": traccc, "hough": hough}, column) is not None

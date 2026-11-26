@@ -47,9 +47,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Syntax of the scripts
-        run: for f in exec/*.sh; do bash -n "$f" && echo "ok  $f"; done
+        run: for f in $(git ls-files '*.sh'); do bash -n "$f" && echo "ok $f"; done
       - name: Shellcheck (errors only)
-        run: shellcheck --severity=error exec/*.sh
+        run: shellcheck --severity=error $(git ls-files '*.sh')
 
   docs:
     runs-on: ubuntu-latest

@@ -34,15 +34,25 @@ except ImportError:
 ## Reconstruction steps, in chain order, with their labels. File reading is
 ## kept apart: it is the same for every algorithm and depends on the disk.
 STEPS = {
-    #"t_h2d_ms": "H2D copy",
-    #"t_clusterization_ms": "Clusterization",
-    #"t_spacepoints_ms": "Spacepoint formation",
+    "t_h2d_ms": "H2D copy",
+    "t_clusterization_ms": "Clusterization",
+    "t_spacepoints_ms": "Spacepoint formation",
     "t_seeding_ms": "Seeding",
     "t_params_ms": "Track params",
     "t_finding_ms": "Track finding",
     "t_fitting_ms": "Track fitting",
-    #"t_d2h_ms": "D2H copy",
+    "t_d2h_ms": "D2H copy",
     "t_hough_ms": "Hough transform",  
+}
+
+
+## Other measures of the event size, written by traccc_reco in its performance
+## file, with their names for the plots: the time is also drawn against each
+## of them (the Hough transform has none of them, only the spacepoints)
+SIZE_VARIABLES = {
+    "n_measurements": "Measurements",
+    "n_seeds": "Seeds",
+    "n_found_tracks": "Found tracks",
 }
 
 
@@ -127,8 +137,9 @@ def summarize(path):
     '''
     @brief reads one performance file and summarizes its events
     @param path : Path of the performance file
-    @return (dict) particles, median spacepoints, median and 16-84% band of
-            the reconstruction time, median time of every step, throughput
+    @return (dict) particles, median spacepoints (and the other sizes of
+            SIZE_VARIABLES, for traccc), median and 16-84% band of the
+            reconstruction time, median time of every step, throughput
     '''
     data = drop_warmup(pd.read_csv(path))
     if data.empty:
@@ -147,6 +158,10 @@ def summarize(path):
         "t_reco_hi_ms": t_reco.quantile(0.84),
         "t_read_ms": data["t_read_ms"].median(),
     }
+    # Measurements, seeds, found tracks: only in the files of traccc
+    for column in SIZE_VARIABLES:
+        if column in data.columns:
+            row[column] = data[column].median()
     for step in steps:
         row[step] = data[step].median()
 
@@ -229,23 +244,63 @@ def series_label(folder):
     return folder.name
 
 
-def plot_reco_time(ax, series):
+def plot_reco_time(ax, series, x="n_spacepoints", xlabel="Spacepoints per event (median)"):
     '''
     @brief median reconstruction time per event against the event size, one
            line per series, with the 16-84% band of the events as error bars
     @param ax : matplotlib axes to draw on
-    @param series : dict label -> summary DataFrame
+    @param series : dict label -> summary DataFrame; the series without the
+           column x are skipped, but keep their colour
+    @param x : (str) column of the event size: n_spacepoints or one of
+           SIZE_VARIABLES
+    @param xlabel : (str) label of the x axis
     '''
-    for label, s in series.items():
+    for i, (label, s) in enumerate(series.items()):
+        if x not in s or s[x].isna().all():
+            continue
         err = [s["t_reco_ms"] - s["t_reco_lo_ms"], s["t_reco_hi_ms"] - s["t_reco_ms"]]
-        ax.errorbar(s["n_spacepoints"], s["t_reco_ms"], yerr=err, marker="o",
-                    capsize=3, label=label)
+        ax.errorbar(s[x], s["t_reco_ms"], yerr=err, marker="o", capsize=3,
+                    color=f"C{i % 10}", label=label)
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("Spacepoints per event (median)")
+    ax.set_xlabel(xlabel)
     ax.set_ylabel("Reconstruction time per event [ms]")
     ax.set_title("Time per event, file reading excluded")
     ax.grid(True, which="both", alpha=0.3)
+
+
+def plot_time_vs(series, column):
+    '''
+    @brief time per event (left) and events per second (right) against one
+           more measure of the event size (measurements, seeds or found
+           tracks), for the series that have it (traccc): they show which
+           quantity drives the time better than the spacepoints
+    @param series : dict label -> summary DataFrame
+    @param column : (str) one of SIZE_VARIABLES
+    @return the matplotlib figure, or None if no series has the column
+    '''
+    with_column = {l: s for l, s in series.items()
+                   if column in s and s[column].notna().any()}
+    if not with_column:
+        return None
+    name = SIZE_VARIABLES[column]
+    xlabel = f"{name} per event (median)"
+    with_throughput = any("events_per_s" in s and s["events_per_s"].notna().any()
+                          for s in with_column.values())
+    if with_throughput:
+        fig, (ax_time, ax_rate) = plt.subplots(1, 2, figsize=(12, 4.8))
+        # All the series are passed, so that every one keeps its colour
+        plot_throughput(ax_rate, series, x=column, xlabel=xlabel)
+    else:
+        fig, ax_time = plt.subplots(figsize=(7, 5))
+    plot_reco_time(ax_time, series, x=column, xlabel=xlabel)
+    fig.suptitle(f"Reconstruction time and throughput against the {name.lower()}",
+                 fontsize=14, fontweight="bold")
+    fig.tight_layout()
+    handles, names = ax_time.get_legend_handles_labels()
+    fig.legend(handles, names, loc="upper center", bbox_to_anchor=(0.5, 0.0),
+               ncol=min(len(names), 4), fontsize=9, frameon=False)
+    return fig
 
 
 def plot_breakdown(ax, label, s):
@@ -312,21 +367,25 @@ def plot_breakdowns(series, ncols=4):
     return fig
 
 
-def plot_throughput(ax, series):
+def plot_throughput(ax, series, x="n_spacepoints", xlabel="Spacepoints per event (median)"):
     '''
     @brief events per second against the event size, one line per series
     @param ax : matplotlib axes to draw on
     @param series : dict label -> summary DataFrame; the series without
-           throughput are skipped, but keep their colour
+           throughput or without the column x are skipped, but keep their colour
+    @param x : (str) column of the event size: n_spacepoints or one of
+           SIZE_VARIABLES
+    @param xlabel : (str) label of the x axis
     '''
     for i, (label, s) in enumerate(series.items()):
         if "events_per_s" not in s or s["events_per_s"].isna().all():
             continue
-        ax.plot(s["n_spacepoints"], s["events_per_s"], marker="o", color=f"C{i % 10}",
-                label=label)
+        if x not in s or s[x].isna().all():
+            continue
+        ax.plot(s[x], s["events_per_s"], marker="o", color=f"C{i % 10}", label=label)
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("Spacepoints per event (median)")
+    ax.set_xlabel(xlabel)
     ax.set_ylabel("Throughput [events/s]")
     ax.set_title("Events per second, file reading included")
     ax.grid(True, which="both", alpha=0.3)
@@ -402,7 +461,13 @@ if __name__ == "__main__":
     series = {label: load_series(folder, backend)
               for label, (folder, backend) in zip(labels, pairs)}
 
-    figs = [plot_time_and_throughput(series), plot_breakdowns(series)]
+    figs = [plot_time_and_throughput(series)]
+    # The same against measurements, seeds and found tracks (traccc only)
+    for column in SIZE_VARIABLES:
+        fig = plot_time_vs(series, column)
+        if fig is not None:
+            figs.append(fig)
+    figs.append(plot_breakdowns(series))
 
     # Default name: the folder given (results/reco -> reco.pdf), or the
     # labels of the series when several folders are given

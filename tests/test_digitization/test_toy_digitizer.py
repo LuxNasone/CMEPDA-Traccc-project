@@ -70,7 +70,7 @@ def digitization_section(path):
 
 
 def test_project_config_is_valid(tmp_path):
-    path = Path(__file__).resolve().parents[2] / "config" / "simulation.conf"
+    path = Path(__file__).resolve().parents[2] /"exec" / "simulation" / "simulation.conf"
     text = digitization_section(path)
     assert "pitch-um" in text  # the [digitization] section was found
     build_digitizer(read_config(write_config(tmp_path / "c.conf", text)))
