@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -46,6 +47,10 @@ using namespace traccc;
  * @param smearing_um : (double) resolution of the measurement, to be put to zero in simulation.conf (in um)
  * @param seed : (std::uint64_t) seed of the RNG 
  * @param traccc_args : (std::vector<std::string>) keys passed directly to traccc (ex. : gen-nparticles)
+ * @param barrel_radii : (std::vector<float>) radii of the barrel layers in mm, one per
+ *        layer (key barrel-radii); empty = the radii of the detray toy detector
+ * @param barrel_phi_modules : (std::vector<unsigned int>) modules in phi of every barrel
+ *        layer, same length as barrel_radii (key barrel-phi-modules)
  */
 
 struct toy_config {
@@ -56,7 +61,31 @@ struct toy_config {
   double smearing_um = 50.;
   std::uint64_t seed = 0u;
   std::vector<std::string> traccc_args;
+  std::vector<float> barrel_radii{};
+  std::vector<unsigned int> barrel_phi_modules{};
+
 };
+
+/**
+ * @brief Reads a comma separated list of numbers, e.g. "32, 60, 88"
+ * @tparam T type of the numbers
+ * @param text : (const std::string) the list
+ * @throws std::invalid_argument if an item is not a number
+ * @return the numbers, in order; empty items are skipped
+ */
+template <typename T>
+std::vector<T> parse_list(const std::string& text) {
+  std::vector<T> values;
+  std::stringstream stream(text);
+  std::string item;
+  while (std::getline(stream, item, ',')) {
+    item = utils::trim(item);
+    if (!item.empty()) {
+      values.push_back(static_cast<T>(std::stod(item)));
+    }
+  }
+  return values;
+}
 
 /**
  * @brief Reads the path of the configuration files, where the simulation parameters are set
@@ -98,6 +127,10 @@ toy_config read_config(const std::string& path) {
         cfg.smearing_um = std::stod(value);
       } else if (key == "seed") {
         cfg.seed = static_cast<std::uint64_t>(std::stoull(value));
+      } else if (key == "barrel-radii") {
+        cfg.barrel_radii = parse_list<float>(value);
+      } else if (key == "barrel-phi-modules") {
+        cfg.barrel_phi_modules = parse_list<unsigned int>(value);
       } else {
         cfg.traccc_args.push_back("--" + key + "=" + value);
       }
@@ -137,6 +170,25 @@ int simulate(const toy_config& cfg,
 
   detray::toy_det_config<scalar> toy_cfg{};
   toy_cfg.n_brl_layers(cfg.barrel).n_edc_layers(cfg.endcap);
+
+  // Custom barrel layers: radii and modules in phi from the configuration file.
+  // The lists of the toy detector start with the beampipe (radius 19 mm, no
+  // modules); the modules along z (14) are the ones of the toy detector
+  if (!cfg.barrel_radii.empty() || !cfg.barrel_phi_modules.empty()) {
+    if (cfg.barrel_radii.size() != cfg.barrel ||
+        cfg.barrel_phi_modules.size() != cfg.barrel) {
+      throw std::invalid_argument(
+          "barrel-radii and barrel-phi-modules need one value per barrel layer "
+          "(barrel = " + std::to_string(cfg.barrel) + ")");
+    }
+    const scalar mm = traccc::unit<scalar>::mm;
+    toy_cfg.m_barrel_layer_radii = {19.f * mm};
+    toy_cfg.m_barrel_binning = {{0u, 0u}};
+    for (std::size_t i = 0u; i < cfg.barrel_radii.size(); ++i) {
+      toy_cfg.m_barrel_layer_radii.push_back(cfg.barrel_radii[i] * mm);
+      toy_cfg.m_barrel_binning.push_back({cfg.barrel_phi_modules[i], 14u});
+    }
+  }
   toy_cfg.module_mat_thickness(0.11f * traccc::unit<scalar>::mm);
   const auto [det, name_map] =
       detray::build_toy_detector<traccc::default_algebra>(host_mr, toy_cfg);
