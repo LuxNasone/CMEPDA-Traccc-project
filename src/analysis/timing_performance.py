@@ -45,7 +45,6 @@ STEPS = {
     "t_hough_ms": "Hough transform",  
 }
 
-
 ## Other measures of the event size, written by traccc_reco in its performance
 ## file, with their names for the plots: the time is also drawn against each
 ## of them (the Hough transform has none of them, only the spacepoints)
